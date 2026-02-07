@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs/promises';
-import { TomcatInstance, TomcatRuntime } from './types';
+import { TomcatInstance, TomcatRuntime, TomCatteryExportData } from './types';
 import { ServerTreeProvider } from './views/ServerTreeProvider';
 import { ConfigWebviewProvider } from './views/ConfigWebviewProvider';
 import { RuntimeManager } from './core/RuntimeManager';
@@ -346,6 +346,53 @@ export async function activate(context: vscode.ExtensionContext) {
     }
     serverTreeProvider.refresh();
   }, 10_000);
+
+  // .vscode/tom-cattery.json 감지 → Import 제안
+  detectWorkspaceConfig(instanceManager, serverTreeProvider);
+}
+
+async function detectWorkspaceConfig(
+  instanceManager: InstanceManager,
+  treeProvider: ServerTreeProvider,
+): Promise<void> {
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!workspaceRoot) { return; }
+
+  const configPath = path.join(workspaceRoot, '.vscode', 'tom-cattery.json');
+  try {
+    await fs.access(configPath);
+  } catch {
+    return; // 파일 없음
+  }
+
+  let exportData: TomCatteryExportData;
+  try {
+    const content = await fs.readFile(configPath, 'utf-8');
+    exportData = JSON.parse(content);
+  } catch {
+    return; // 파싱 실패
+  }
+
+  if (!exportData.version || !Array.isArray(exportData.servers) || exportData.servers.length === 0) {
+    return;
+  }
+
+  // 현재 등록되지 않은 서버만 필터링
+  const existingNames = new Set(instanceManager.getInstances().map(i => i.name));
+  const newServers = exportData.servers.filter(s => !existingNames.has(s.name));
+
+  if (newServers.length === 0) { return; }
+
+  const serverNames = newServers.map(s => s.name).join(', ');
+  const action = await vscode.window.showInformationMessage(
+    `이 프로젝트에 Tomcat 설정이 있습니다 (${newServers.length}개 서버: ${serverNames}). 가져올까요?`,
+    '가져오기',
+    '무시',
+  );
+
+  if (action !== '가져오기') { return; }
+
+  await vscode.commands.executeCommand('tomCattery.importConfig', configPath);
 }
 
 export function deactivate() {

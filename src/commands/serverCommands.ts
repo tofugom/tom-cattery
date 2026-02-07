@@ -1008,21 +1008,27 @@ export function registerServerCommands(
     }),
 
     // ── Import Config ──
-    vscode.commands.registerCommand('tomCattery.importConfig', async () => {
-      // 1. 파일 선택
-      const fileUris = await vscode.window.showOpenDialog({
-        canSelectFiles: true,
-        canSelectFolders: false,
-        canSelectMany: false,
-        filters: { 'JSON files': ['json'] },
-        openLabel: '설정 파일 선택',
-      });
-      if (!fileUris || fileUris.length === 0) { return; }
+    vscode.commands.registerCommand('tomCattery.importConfig', async (filePath?: string) => {
+      // 1. 파일 경로 결정 (인자로 받거나 사용자 선택)
+      let targetPath: string;
+      if (filePath) {
+        targetPath = filePath;
+      } else {
+        const fileUris = await vscode.window.showOpenDialog({
+          canSelectFiles: true,
+          canSelectFolders: false,
+          canSelectMany: false,
+          filters: { 'JSON files': ['json'] },
+          openLabel: '설정 파일 선택',
+        });
+        if (!fileUris || fileUris.length === 0) { return; }
+        targetPath = fileUris[0].fsPath;
+      }
 
       // 2. 파일 파싱
       let exportData: TomCatteryExportData;
       try {
-        const content = await fs.readFile(fileUris[0].fsPath, 'utf-8');
+        const content = await fs.readFile(targetPath, 'utf-8');
         exportData = JSON.parse(content);
       } catch (err: any) {
         vscode.window.showErrorMessage(`설정 파일을 읽을 수 없습니다: ${err.message}`);
@@ -1077,6 +1083,83 @@ export function registerServerCommands(
           `${imported}개 서버를 가져왔습니다.` + (skipped > 0 ? ` (${skipped}개 스킵)` : ''),
         );
       }
+    }),
+
+    // ── Save to Workspace ──
+    vscode.commands.registerCommand('tomCattery.saveToWorkspace', async (item?: ServerTreeItem) => {
+      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (!workspaceRoot) {
+        vscode.window.showWarningMessage('워크스페이스가 열려 있지 않습니다.');
+        return;
+      }
+
+      const instances = instanceManager.getInstances();
+      if (instances.length === 0) {
+        vscode.window.showInformationMessage('저장할 서버가 없습니다.');
+        return;
+      }
+
+      // Export 대상 결정
+      let serversToExport: TomcatInstance[];
+
+      if (item?.instance) {
+        serversToExport = [item.instance];
+      } else {
+        const choices = [
+          { label: '$(server-environment) 전체 서버', description: `${instances.length}개 서버`, value: '__all__' },
+          ...instances.map(i => ({
+            label: i.name,
+            description: `:${i.ports.http} (${i.status})`,
+            value: i.name,
+          })),
+        ];
+        const picked = await vscode.window.showQuickPick(choices, {
+          placeHolder: '워크스페이스에 저장할 서버를 선택하세요',
+        });
+        if (!picked) { return; }
+
+        if (picked.value === '__all__') {
+          serversToExport = instances;
+        } else {
+          const found = instances.find(i => i.name === picked.value);
+          if (!found) { return; }
+          serversToExport = [found];
+        }
+      }
+
+      // Export 데이터 구성
+      const runtimes = runtimeManager.getRuntimes();
+      const exportData: TomCatteryExportData = {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        servers: serversToExport.map(inst => {
+          const rt = runtimes.find(r => r.path === inst.runtimePath);
+          return {
+            name: inst.name,
+            runtimePath: inst.runtimePath,
+            runtimeVersion: rt?.version,
+            runtimeType: rt?.type,
+            javaHome: inst.javaHome,
+            javaHomeName: inst.javaHomeName,
+            ports: { ...inst.ports },
+            jvmArgs: [...inst.jvmArgs],
+            envVars: { ...inst.envVars },
+            deployments: inst.deployments.map(d => ({ ...d })),
+            debug: { ...inst.debug },
+            timeouts: { ...inst.timeouts },
+          };
+        }),
+      };
+
+      // .vscode/tom-cattery.json에 저장
+      const vscodeDir = path.join(workspaceRoot, '.vscode');
+      await fs.mkdir(vscodeDir, { recursive: true });
+      const targetPath = path.join(vscodeDir, 'tom-cattery.json');
+      await fs.writeFile(targetPath, JSON.stringify(exportData, null, 2), 'utf-8');
+
+      vscode.window.showInformationMessage(
+        `${serversToExport.length}개 서버 설정을 .vscode/tom-cattery.json에 저장했습니다.`,
+      );
     }),
 
     // ── Clone Server ──
