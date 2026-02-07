@@ -12,12 +12,17 @@ import { LogStreamer } from './core/LogStreamer';
 import { DeployManager } from './core/DeployManager';
 import { DebugController } from './core/DebugController';
 import { registerServerCommands } from './commands/serverCommands';
+import { MetricsCollector } from './core/MetricsCollector';
 
 let processManager: ProcessManager | undefined;
 let logStreamer: LogStreamer | undefined;
 let debugController: DebugController | undefined;
 let deployManager: DeployManager | undefined;
 let configWebviewProvider: ConfigWebviewProvider | undefined;
+
+/** 사용자가 직접 Start/Debug/Restart 한 서버만 브라우저를 연다 (extension 재로드 시 방지) */
+const pendingBrowserOpen = new Set<string>();
+let metricsTimer: ReturnType<typeof setInterval> | undefined;
 
 /**
  * ~/.vscode/tom-cattery/ → globalStorageUri 마이그레이션
@@ -189,9 +194,19 @@ export async function activate(context: vscode.ExtensionContext) {
         const autoCount = inst.deployments.filter(d => d.autoDeploy).length;
         console.log(`[Tom Cattery] Server "${name}" is ${status}. Setting up watchers (${autoCount} auto-deploy deployment(s))`);
         deployManager!.setupWatchers(inst);
+
+        // 사용자가 직접 시작한 경우에만 브라우저 열기
+        if (pendingBrowserOpen.delete(name)) {
+          const openBrowser = vscode.workspace.getConfiguration('tomCattery')
+            .get<boolean>('openBrowserOnStart', true);
+          if (openBrowser) {
+            vscode.env.openExternal(vscode.Uri.parse(`http://localhost:${inst.ports.http}/`));
+          }
+        }
       }
     } else if (status === 'stopped') {
       deployManager!.disposeWatchers(name);
+      serverTreeProvider.clearMetrics(name);
     }
   };
 
@@ -209,10 +224,30 @@ export async function activate(context: vscode.ExtensionContext) {
     deployManager,
     debugController,
     configWebviewProvider,
+    pendingBrowserOpen,
   );
+
+  // 10초 간격 메트릭 수집 (Uptime + Memory RSS)
+  metricsTimer = setInterval(async () => {
+    const instances = instanceManager.getInstances();
+    const running = instances.filter(i =>
+      (i.status === 'running' || i.status === 'debugging') && i.pid,
+    );
+    if (running.length === 0) { return; }
+
+    for (const inst of running) {
+      const rssKb = await MetricsCollector.getRssKb(inst.pid!);
+      serverTreeProvider.updateMetrics(inst.name, rssKb);
+    }
+    serverTreeProvider.refresh();
+  }, 10_000);
 }
 
 export function deactivate() {
+  if (metricsTimer) {
+    clearInterval(metricsTimer);
+    metricsTimer = undefined;
+  }
   configWebviewProvider?.dispose();
   deployManager?.disposeAllWatchers();
   debugController?.disposeAll();

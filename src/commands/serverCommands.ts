@@ -134,6 +134,7 @@ export function registerServerCommands(
   deployManager: DeployManager,
   debugController: DebugController,
   configWebviewProvider: ConfigWebviewProvider,
+  pendingBrowserOpen: Set<string>,
 ): void {
   context.subscriptions.push(
     // ── Add Server ──
@@ -304,8 +305,10 @@ export function registerServerCommands(
         return;
       }
       try {
+        pendingBrowserOpen.add(instance.name);
         await processManager.startServer(instance);
       } catch (err: any) {
+        pendingBrowserOpen.delete(instance.name);
         const action = await vscode.window.showErrorMessage(
           `서버 시작 실패: ${err.message}`,
           '로그 보기',
@@ -342,8 +345,10 @@ export function registerServerCommands(
         return;
       }
       try {
+        pendingBrowserOpen.add(instance.name);
         await processManager.restartServer(instance);
       } catch (err: any) {
+        pendingBrowserOpen.delete(instance.name);
         const action = await vscode.window.showErrorMessage(
           `서버 재시작 실패: ${err.message}`,
           '로그 보기',
@@ -361,11 +366,13 @@ export function registerServerCommands(
         return;
       }
       try {
+        pendingBrowserOpen.add(instance.name);
         await vscode.window.withProgress(
           { location: vscode.ProgressLocation.Notification, title: `"${instance.name}" 디버그 시작 중...`, cancellable: false },
           () => debugController.debugServer(instance),
         );
       } catch (err: any) {
+        pendingBrowserOpen.delete(instance.name);
         const action = await vscode.window.showErrorMessage(
           `디버그 실패: ${err.message}`,
           '로그 보기',

@@ -12,9 +12,13 @@
   "activationEvents": [],
   "main": "./out/extension.js",
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run esbuild-base -- --minify",
+    "esbuild-base": "esbuild ./src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --sourcemap",
+    "esbuild": "npm run esbuild-base",
+    "esbuild-watch": "npm run esbuild-base -- --watch",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
+    "typecheck": "tsc -p ./ --noEmit",
     "lint": "eslint src --ext ts",
     "package": "vsce package",
     "publish": "vsce publish"
@@ -160,6 +164,11 @@
           "type": "boolean",
           "default": true,
           "description": "포트 충돌 시 자동으로 사용 가능한 포트 할당"
+        },
+        "tomCattery.openBrowserOnStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "서버 시작/디버그 시 기본 브라우저에서 자동으로 열기"
         }
       }
     },

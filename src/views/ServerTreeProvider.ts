@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { TomcatInstance, Deployment } from '../types';
+import { MetricsCollector } from '../core/MetricsCollector';
 
 export type TreeItem = ServerTreeItem | DeploymentTreeItem;
 
@@ -32,6 +33,7 @@ export class DeploymentTreeItem extends vscode.TreeItem {
 export class ServerTreeItem extends vscode.TreeItem {
   constructor(
     public readonly instance: TomcatInstance,
+    rssKb?: number,
   ) {
     super(
       instance.name,
@@ -47,9 +49,18 @@ export class ServerTreeItem extends vscode.TreeItem {
     this.iconPath = this.getStatusIcon(instance.status);
 
     const pidLine = instance.pid ? `- PID: ${instance.pid}\n` : '';
+    let metricsLines = '';
+    if ((instance.status === 'running' || instance.status === 'debugging') && instance.startedAt) {
+      const uptimeMs = Date.now() - instance.startedAt;
+      metricsLines += `- Uptime: ${MetricsCollector.formatUptime(uptimeMs)}\n`;
+      if (rssKb !== undefined) {
+        metricsLines += `- Memory (RSS): ${MetricsCollector.formatMemoryMb(rssKb)}\n`;
+      }
+    }
     this.tooltip = new vscode.MarkdownString(
       `**${instance.name}** (${instance.status})\n\n` +
       pidLine +
+      metricsLines +
       `- HTTP: ${instance.ports.http}\n` +
       `- Shutdown: ${instance.ports.shutdown}\n` +
       `- Debug: ${instance.ports.debug}\n` +
@@ -77,6 +88,15 @@ export class ServerTreeProvider implements vscode.TreeDataProvider<TreeItem> {
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
   private servers: TomcatInstance[] = [];
+  private metricsCache = new Map<string, number | undefined>();
+
+  updateMetrics(name: string, rssKb: number | undefined): void {
+    this.metricsCache.set(name, rssKb);
+  }
+
+  clearMetrics(name: string): void {
+    this.metricsCache.delete(name);
+  }
 
   getTreeItem(element: TreeItem): vscode.TreeItem {
     return element;
@@ -84,7 +104,9 @@ export class ServerTreeProvider implements vscode.TreeDataProvider<TreeItem> {
 
   getChildren(element?: TreeItem): TreeItem[] {
     if (!element) {
-      return this.servers.map(server => new ServerTreeItem(server));
+      return this.servers.map(server =>
+        new ServerTreeItem(server, this.metricsCache.get(server.name)),
+      );
     }
     if (element instanceof ServerTreeItem) {
       return element.instance.deployments.map(

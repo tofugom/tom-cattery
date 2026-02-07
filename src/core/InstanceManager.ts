@@ -73,6 +73,11 @@ export class InstanceManager {
     if (instance) {
       instance.status = status;
       instance.pid = pid;
+      if (status === 'running' || status === 'debugging') {
+        instance.startedAt = Date.now();
+      } else if (status === 'stopped') {
+        instance.startedAt = undefined;
+      }
     }
   }
 
