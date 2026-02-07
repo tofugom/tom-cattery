@@ -17,6 +17,7 @@ export class ConfigWebviewProvider {
     private instanceManager: InstanceManager,
     private processManager: ProcessManager,
     private treeProvider: ServerTreeProvider,
+    private extensionUri: vscode.Uri,
   ) {}
 
   openConfig(instance: TomcatInstance): void {
@@ -31,12 +32,16 @@ export class ConfigWebviewProvider {
       'tomCatteryConfig',
       `Config: ${instance.name}`,
       vscode.ViewColumn.One,
-      { enableScripts: true, retainContextWhenHidden: true },
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+        localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, 'node_modules', '@vscode/codicons', 'dist')],
+      },
     );
 
     this.panels.set(instance.name, panel);
 
-    panel.webview.html = this.getHtmlForWebview(instance);
+    panel.webview.html = this.getHtmlForWebview(instance, panel.webview);
 
     panel.webview.onDidReceiveMessage(
       (msg: ConfigMessage) => this.handleMessage(msg, instance, panel),
@@ -285,14 +290,19 @@ export class ConfigWebviewProvider {
     this.panels.clear();
   }
 
-  private getHtmlForWebview(instance: TomcatInstance): string {
+  private getHtmlForWebview(instance: TomcatInstance, webview?: vscode.Webview): string {
     const data = JSON.stringify(this.serializeInstance(instance));
+
+    const codiconsUri = webview
+      ? webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'node_modules', '@vscode/codicons', 'dist', 'codicon.css'))
+      : '';
 
     return /* html */ `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link href="${codiconsUri}" rel="stylesheet" />
 <title>Config: ${this.escapeHtml(instance.name)}</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -525,9 +535,14 @@ export class ConfigWebviewProvider {
     background: var(--vscode-errorForeground, #f44);
     color: var(--vscode-editor-background);
   }
-  .field input[readonly] {
-    opacity: 0.8;
-    cursor: default;
+  .field-value {
+    flex: 1;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 0.92em;
+    color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 </style>
 </head>
@@ -545,23 +560,23 @@ export class ConfigWebviewProvider {
       <h2>General</h2>
       <div class="field">
         <label>Server Name</label>
-        <input type="text" id="serverName" readonly />
+        <span class="field-value" id="serverName"></span>
       </div>
       <div class="field">
         <label>Catalina Home</label>
-        <input type="text" id="runtimePath" readonly />
+        <span class="field-value" id="runtimePath"></span>
       </div>
       <div class="field">
         <label>Catalina Base</label>
-        <input type="text" id="basePath" readonly />
-        <button class="btn-icon" id="openBasePath" title="폴더 열기">&#128193;</button>
+        <span class="field-value" id="basePath"></span>
+        <button class="btn-icon" id="openBasePath" title="폴더 열기"><span class="codicon codicon-folder-opened"></span></button>
       </div>
       <div class="field">
         <label>Java Home</label>
         <input type="text" id="javaHomeDisplay" readonly style="flex:2;" />
         <input type="hidden" id="javaHome" />
         <input type="hidden" id="javaHomeName" />
-        <button class="btn-icon" id="browseJavaHome" title="Java Home 변경">&#128193;</button>
+        <button class="btn-icon" id="browseJavaHome" title="Java Home 변경"><span class="codicon codicon-settings-gear"></span></button>
       </div>
     </div>
 
@@ -659,9 +674,10 @@ export class ConfigWebviewProvider {
   // ===== Server Tab =====
   function populateForm(data) {
     config = data;
-    document.getElementById('serverName').value = data.name;
-    document.getElementById('runtimePath').value = data.runtimePath;
-    document.getElementById('basePath').value = data.basePath || '';
+    document.getElementById('serverName').textContent = data.name;
+    document.getElementById('runtimePath').textContent = data.runtimePath;
+    document.getElementById('basePath').textContent = data.basePath || '';
+    document.getElementById('basePath').dataset.path = data.basePath || '';
     document.getElementById('javaHome').value = data.javaHome || '';
     document.getElementById('javaHomeName').value = data.javaHomeName || '';
     document.getElementById('javaHomeDisplay').value = formatJavaHome(data.javaHomeName, data.javaHome);
@@ -693,7 +709,7 @@ export class ConfigWebviewProvider {
     tr.innerHTML =
       '<td><input type="text" class="env-key" value="' + escapeAttr(key || '') + '" placeholder="KEY" /></td>' +
       '<td><input type="text" class="env-val" value="' + escapeAttr(value || '') + '" placeholder="value" /></td>' +
-      '<td><button class="btn-icon-danger" onclick="this.closest(\\'tr\\').remove()" title="삭제">&#128465;</button></td>';
+      '<td><button class="btn-icon-danger" onclick="this.closest(\\'tr\\').remove()" title="삭제"><span class="codicon codicon-trash"></span></button></td>';
     tbody.appendChild(tr);
   }
 
@@ -723,7 +739,7 @@ export class ConfigWebviewProvider {
     card.innerHTML =
       '<div class="card-header">' +
         '<span class="card-title">' + escapeHtml(warName) + '</span>' +
-        '<button class="btn-icon-danger btn-remove-deploy" data-index="' + index + '" title="삭제">&#128465;</button>' +
+        '<button class="btn-icon-danger btn-remove-deploy" data-index="' + index + '" title="삭제"><span class="codicon codicon-trash"></span></button>' +
       '</div>' +
       '<div class="field">' +
         '<label>Context Path</label>' +
@@ -732,12 +748,12 @@ export class ConfigWebviewProvider {
       '<div class="field">' +
         '<label>WAR Path</label>' +
         '<input type="text" class="dep-warPath" value="' + escapeAttr(dep.warPath || '') + '" placeholder="/path/to/app.war" />' +
-        '<button class="btn-icon btn-browse-war" data-index="' + index + '" title="WAR 파일 선택">&#128193;</button>' +
+        '<button class="btn-icon btn-browse-war" data-index="' + index + '" title="WAR 파일 선택"><span class="codicon codicon-folder-opened"></span></button>' +
       '</div>' +
       '<div class="field">' +
         '<label>Deploy Path</label>' +
-        '<input type="text" class="dep-deployPath" value="' + escapeAttr(displayPath) + '" readonly />' +
-        '<button class="btn-icon btn-open-deploy" title="배포 폴더 열기">&#128193;</button>' +
+        '<span class="field-value dep-deployPath">' + escapeHtml(displayPath) + '</span>' +
+        '<button class="btn-icon btn-open-deploy" title="배포 폴더 열기"><span class="codicon codicon-folder-opened"></span></button>' +
       '</div>' +
       '<div class="field">' +
         '<label>Build Task</label>' +
@@ -767,7 +783,7 @@ export class ConfigWebviewProvider {
     // Update deploy path when context path changes
     card.querySelector('.dep-contextPath').addEventListener('input', (e) => {
       const ctxPath = e.target.value || '/';
-      card.querySelector('.dep-deployPath').value = 'CATALINA_BASE/webapps/' + contextPathToDir(ctxPath);
+      card.querySelector('.dep-deployPath').textContent = 'CATALINA_BASE/webapps/' + contextPathToDir(ctxPath);
     });
 
     // Remove button
@@ -911,7 +927,7 @@ export class ConfigWebviewProvider {
   });
 
   document.getElementById('openBasePath').addEventListener('click', () => {
-    const basePath = document.getElementById('basePath').value;
+    const basePath = document.getElementById('basePath').dataset.path;
     if (basePath) {
       vscode.postMessage({ command: 'openFolder', path: basePath });
     }

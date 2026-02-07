@@ -155,12 +155,12 @@
       {
         "command": "tomCattery.exportConfig",
         "title": "Tom Cattery: Export Server Config",
-        "icon": "$(export)"
+        "icon": "$(arrow-up)"
       },
       {
         "command": "tomCattery.importConfig",
         "title": "Tom Cattery: Import Server Config",
-        "icon": "$(import)"
+        "icon": "$(download)"
       },
       {
         "command": "tomCattery.cloneServer",
@@ -244,6 +244,11 @@
           "group": "inline@2"
         },
         {
+          "command": "tomCattery.openConfig",
+          "when": "view == tomCattery.servers && viewItem =~ /server-.*/",
+          "group": "0_global_config@1"
+        },
+        {
           "command": "tomCattery.addDeployment",
           "when": "view == tomCattery.servers && viewItem =~ /server-.*/",
           "group": "1_actions@1"
@@ -262,11 +267,6 @@
           "command": "tomCattery.cleanDeployment",
           "when": "view == tomCattery.servers && viewItem =~ /server-.*/",
           "group": "1_actions@4"
-        },
-        {
-          "command": "tomCattery.openConfig",
-          "when": "view == tomCattery.servers && viewItem =~ /server-.*/",
-          "group": "2_config@1"
         },
         {
           "command": "tomCattery.openLogs",
@@ -322,6 +322,7 @@
     }
   },
   "dependencies": {
+    "@vscode/codicons": "^0.0.44",
     "adm-zip": "^0.5.10",
     "fast-xml-parser": "^4.3.0",
     "portfinder": "^1.0.32"
