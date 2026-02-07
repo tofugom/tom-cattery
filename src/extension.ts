@@ -142,6 +142,100 @@ async function migrateFromLegacyPath(context: vscode.ExtensionContext): Promise<
   console.log('[Tom Cattery] 마이그레이션 완료');
 }
 
+/**
+ * publisher 변경 시 globalStorageUri 경로가 바뀌므로 이전 데이터를 마이그레이션한다.
+ * 예: undefined_publisher.tom-cattery/ → tofu9.tom-cattery/
+ *     woongki.tom-cattery/ → tofu9.tom-cattery/
+ */
+async function migrateFromOldPublisher(context: vscode.ExtensionContext): Promise<void> {
+  const newBase = context.globalStorageUri.fsPath;
+  const globalStorageParent = path.dirname(newBase);
+
+  // 이전에 사용했을 수 있는 publisher 경로 목록
+  const oldPublishers = ['undefined_publisher.tom-cattery', 'woongki.tom-cattery'];
+
+  for (const oldDir of oldPublishers) {
+    const oldBase = path.join(globalStorageParent, oldDir);
+
+    // 현재 경로와 같으면 스킵
+    if (oldBase === newBase) {
+      continue;
+    }
+
+    try {
+      await fs.access(oldBase);
+    } catch {
+      continue; // 이전 경로 없으면 스킵
+    }
+
+    console.log(`[Tom Cattery] Publisher 마이그레이션: ${oldDir} → ${path.basename(newBase)}`);
+    await fs.mkdir(newBase, { recursive: true });
+
+    // servers 디렉터리 이동
+    const oldServers = path.join(oldBase, 'servers');
+    const newServers = path.join(newBase, 'servers');
+    try {
+      await fs.access(oldServers);
+      await fs.mkdir(newServers, { recursive: true });
+      const entries = await fs.readdir(oldServers, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) { continue; }
+        const src = path.join(oldServers, entry.name);
+        const dst = path.join(newServers, entry.name);
+        try {
+          await fs.access(dst);
+          console.log(`[Tom Cattery] 서버 "${entry.name}" 이미 존재, 스킵`);
+        } catch {
+          await fs.rename(src, dst);
+          console.log(`[Tom Cattery] 서버 이동: ${entry.name}`);
+        }
+      }
+    } catch { /* servers 없음 */ }
+
+    // tomcat (다운로드된 런타임) 디렉터리 이동
+    const oldTomcat = path.join(oldBase, 'tomcat');
+    const newTomcat = path.join(newBase, 'tomcat');
+    try {
+      await fs.access(oldTomcat);
+      await fs.mkdir(newTomcat, { recursive: true });
+      const entries = await fs.readdir(oldTomcat, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) { continue; }
+        const src = path.join(oldTomcat, entry.name);
+        const dst = path.join(newTomcat, entry.name);
+        try {
+          await fs.access(dst);
+        } catch {
+          await fs.rename(src, dst);
+          console.log(`[Tom Cattery] 런타임 이동: ${entry.name}`);
+        }
+      }
+    } catch { /* tomcat 없음 */ }
+
+    // globalState의 tomcatRuntimes 경로 업데이트
+    const runtimes = context.globalState.get<TomcatRuntime[]>('tomcatRuntimes', []);
+    let updated = false;
+    for (const rt of runtimes) {
+      if (rt.path.startsWith(oldBase)) {
+        const rel = path.relative(oldBase, rt.path);
+        rt.path = path.join(newBase, rel);
+        updated = true;
+      }
+    }
+    if (updated) {
+      await context.globalState.update('tomcatRuntimes', runtimes);
+    }
+
+    // 이전 디렉터리 삭제
+    try {
+      await fs.rm(oldBase, { recursive: true, force: true });
+      console.log(`[Tom Cattery] 이전 경로 삭제: ${oldDir}`);
+    } catch (err: any) {
+      console.warn(`[Tom Cattery] 이전 경로 삭제 실패: ${err.message}`);
+    }
+  }
+}
+
 export async function activate(context: vscode.ExtensionContext) {
   console.log('Tom Cattery is now active!');
 
@@ -162,6 +256,9 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // 기존 경로 → globalStorageUri 마이그레이션
   await migrateFromLegacyPath(context);
+
+  // publisher 변경 시 globalStorage 경로 마이그레이션
+  await migrateFromOldPublisher(context);
 
   const runtimeManager = new RuntimeManager(context);
   const instanceManager = new InstanceManager(context.globalStorageUri.fsPath);
