@@ -3,7 +3,7 @@
   "displayName": "Tom Cattery",
   "description": "Tomcat Server Manager for VSCode - raise your Tomcats in one place",
   "version": "0.1.0",
-  "publisher": "woongki",
+  "publisher": "tofu9",
   "license": "MIT",
   "repository": {
     "type": "git",
