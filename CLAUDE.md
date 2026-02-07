@@ -221,6 +221,23 @@ export interface TomcatRuntime {
 
 ---
 
+## 작업 규칙
+
+### 언어 및 문서 정책
+- 모든 문서, 대답, 커밋 메시지는 **한글**로 작성한다
+- 문서는 **Markdown** 형식으로 작성한다
+- 도식화가 필요한 경우 **Mermaid.js**를 사용한다 (flowchart, sequence, class diagram 등 적절한 방식 선택)
+
+### 커밋 정책
+- 각 Phase 구현이 완료되면 **다음 Phase로 넘어가기 전에 반드시 커밋**한다
+- 커밋 메시지는 변경 내용을 명확히 요약한다
+
+### 브랜치 전략
+- 작업 브랜치: `feature/phase-1`
+- 메인 브랜치: `main`
+
+---
+
 ## 주의사항
 
 - package.json의 `contributes` 섹션을 먼저 완성한 후 코드를 채울 것 (VSCode가 이 선언을 기반으로 Extension을 인식)
@@ -228,3 +245,11 @@ export interface TomcatRuntime {
 - Extension 번들링은 esbuild 사용 권장
 - 필수 의존 Extension: `redhat.java`, `vscjava.vscode-java-debug` (없으면 안내 메시지 표시)
 - Windows 지원을 고려하여 setenv.bat도 생성하고, 경로 구분자는 path.join() 사용
+
+---
+
+## 작업 이력 참조
+
+- 전체 작업 로그: `docs/WORKLOG.md` — Phase별 완료 항목, 버그 수정, UX 개선 이력이 기록되어 있음
+- 새 환경(다른 컴퓨터)에서 작업을 이어갈 때는 반드시 `docs/WORKLOG.md`를 먼저 읽고 현재 진행 상태를 파악할 것
+- 현재 브랜치: `feature/phase-1`, publisher: `tofu9`, 버전: `0.1.0`
