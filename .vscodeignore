@@ -10,3 +10,7 @@ CLAUDE.md
 .DS_Store
 sample/**
 tsconfig.json
+jest.config.js
+src/**/__tests__/**
+tom-cattery-design.md
+tom-cattery-techstack-guide.md

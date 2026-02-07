@@ -761,7 +761,67 @@ export function registerServerCommands(
       if (!instance) {
         return;
       }
-      logStreamer.show(instance.name);
+
+      const choice = await vscode.window.showQuickPick([
+        { label: '$(terminal) 콘솔 출력 (stdout)', id: 'stdout' },
+        { label: '$(file) 로그 파일 열기...', id: 'file' },
+      ], { placeHolder: '로그 유형을 선택하세요' });
+
+      if (!choice) {
+        return;
+      }
+
+      if (choice.id === 'stdout') {
+        logStreamer.show(instance.name);
+        return;
+      }
+
+      // 로그 파일 선택
+      const logsDir = path.join(instance.basePath, 'logs');
+      try {
+        const entries = await fs.readdir(logsDir, { withFileTypes: true });
+        const logFiles: { name: string; size: number; mtime: Date }[] = [];
+
+        for (const entry of entries) {
+          if (!entry.isDirectory()) {
+            const ext = path.extname(entry.name).toLowerCase();
+            if (['.log', '.out', '.txt'].includes(ext)) {
+              const stat = await fs.stat(path.join(logsDir, entry.name));
+              logFiles.push({ name: entry.name, size: stat.size, mtime: stat.mtime });
+            }
+          }
+        }
+
+        if (logFiles.length === 0) {
+          vscode.window.showInformationMessage(`"${instance.name}" 서버의 로그 파일이 없습니다.`);
+          return;
+        }
+
+        // 최신 파일 순으로 정렬
+        logFiles.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+
+        const formatSize = (bytes: number): string => {
+          if (bytes < 1024) { return `${bytes} B`; }
+          if (bytes < 1024 * 1024) { return `${(bytes / 1024).toFixed(1)} KB`; }
+          return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+        };
+
+        const picked = await vscode.window.showQuickPick(
+          logFiles.map(f => ({
+            label: f.name,
+            description: `${formatSize(f.size)} · ${f.mtime.toLocaleString()}`,
+            filePath: path.join(logsDir, f.name),
+          })),
+          { placeHolder: '열 로그 파일을 선택하세요' },
+        );
+
+        if (picked) {
+          const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(picked.filePath));
+          await vscode.window.showTextDocument(doc, { preview: false });
+        }
+      } catch {
+        vscode.window.showWarningMessage(`로그 디렉터리에 접근할 수 없습니다: ${logsDir}`);
+      }
     }),
 
     // ── Delete Server ──
@@ -1016,6 +1076,49 @@ export function registerServerCommands(
         vscode.window.showInformationMessage(
           `${imported}개 서버를 가져왔습니다.` + (skipped > 0 ? ` (${skipped}개 스킵)` : ''),
         );
+      }
+    }),
+
+    // ── Clone Server ──
+    vscode.commands.registerCommand('tomCattery.cloneServer', async (item?: ServerTreeItem) => {
+      const source = item?.instance ?? await pickServer(instanceManager);
+      if (!source) {
+        return;
+      }
+
+      const newName = await vscode.window.showInputBox({
+        prompt: `서버 "${source.name}"을 복제합니다. 새 서버 이름을 입력하세요.`,
+        placeHolder: `${source.name}-copy`,
+        validateInput: (value) => {
+          if (!value || !value.trim()) {
+            return '서버 이름을 입력하세요.';
+          }
+          if (instanceManager.getInstance(value.trim())) {
+            return `"${value.trim()}" 이름의 서버가 이미 존재합니다.`;
+          }
+          if (/[\/\\:*?"<>|]/.test(value)) {
+            return '서버 이름에 특수 문자를 사용할 수 없습니다.';
+          }
+          return undefined;
+        },
+      });
+      if (!newName) {
+        return;
+      }
+
+      try {
+        const newPorts = await PortUtils.findAvailablePorts(
+          source.ports.http + 1,
+          instanceManager.getInstances(),
+        );
+
+        const instance = await instanceManager.cloneInstance(source.name, newName.trim(), newPorts);
+        treeProvider.setServers(instanceManager.getInstances());
+        vscode.window.showInformationMessage(
+          `서버 "${source.name}"이 "${newName.trim()}"(으)로 복제되었습니다. (HTTP: ${newPorts.http})`,
+        );
+      } catch (err: any) {
+        vscode.window.showErrorMessage(`서버 복제 실패: ${err.message}`);
       }
     }),
 

@@ -252,3 +252,46 @@
 7. 서버 실행 중 Save → "Restart required" 경고 팝업 → "Restart Now" 클릭 시 재기동
 8. "Save & Restart" 버튼 → 설정 저장 후 서버 즉시 재시작
 9. 같은 서버 Config를 두 번 열면 기존 패널 포커스 (중복 생성 안됨)
+
+## Phase 14: 서버 복제 (완료)
+
+**작업일**: 2026-02-07
+
+### 완료 항목
+- `InstanceManager.cloneInstance()` 메서드 추가
+  - CATALINA_BASE 전체 복사 → webapps/logs/work/temp 클린업 → 새 포트 할당 → server.xml 패치 → setenv 재생성
+- `tomCattery.cloneServer` 커맨드 (서버 우클릭 메뉴 2_config 그룹)
+- package.json에 커맨드/메뉴 선언
+
+## Phase 15: Tomcat 로그 파일 뷰어 (완료)
+
+**작업일**: 2026-02-07
+
+### 완료 항목
+- `tomCattery.openLogs` 커맨드 확장
+  - QuickPick: 콘솔 출력 (stdout) / 로그 파일 열기
+  - `{CATALINA_BASE}/logs/` 디렉터리 스캔 → .log/.out/.txt 파일 목록 (크기, 수정일 표시)
+  - 선택 파일을 TextDocument로 열기
+
+## Phase 16: Jest 테스트 코드 (완료)
+
+**작업일**: 2026-02-07
+
+### 완료 항목
+- Jest + ts-jest 셋업 (jest.config.js, devDependencies)
+- GradleProjectScanner 테스트: parseIncludeStatements(), containsWarPlugin()
+- MetricsCollector 테스트: formatUptime(), formatMemoryMb()
+- DeployManager 테스트: contextPathToDir()
+- 전체 31개 테스트 통과
+
+## Phase 17: 마켓플레이스 배포 준비 (완료)
+
+**작업일**: 2026-02-07
+
+### 완료 항목
+- package.json: publisher, license, repository, keywords, galleryBanner, version 0.1.0
+- README.md: 기능 개요, 시작 가이드, 명령어 목록, 설정 테이블
+- CHANGELOG.md: v0.1.0 변경 이력
+- LICENSE: MIT 라이선스
+- .vscodeignore: jest.config.js, __tests__, 설계 문서 제외
+- VSIX 패키징 성공: tom-cattery-0.1.0.vsix (228 KB)
