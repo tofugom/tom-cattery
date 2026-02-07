@@ -16,6 +16,21 @@ export class DebugController {
   ) {}
 
   async debugServer(instance: TomcatInstance): Promise<void> {
+    // Java Debugger Extension 체크
+    if (!vscode.extensions.getExtension('vscjava.vscode-java-debug')) {
+      const action = await vscode.window.showErrorMessage(
+        '디버그를 사용하려면 "Debugger for Java" Extension이 필요합니다.',
+        'Extension 설치',
+      );
+      if (action === 'Extension 설치') {
+        vscode.commands.executeCommand(
+          'workbench.extensions.installExtension',
+          'vscjava.vscode-java-debug',
+        );
+      }
+      throw new Error('"Debugger for Java" Extension이 설치되어 있지 않습니다.');
+    }
+
     if (this.processManager.isRunning(instance.name)) {
       throw new Error(`Server "${instance.name}" is already running`);
     }

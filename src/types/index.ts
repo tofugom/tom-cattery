@@ -4,6 +4,7 @@ export interface TomcatInstance {
   runtimePath: string;
   ports: PortConfig;
   javaHome: string;
+  javaHomeName?: string;
   jvmArgs: string[];
   envVars: Record<string, string>;
   deployments: Deployment[];

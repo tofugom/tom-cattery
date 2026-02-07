@@ -8,6 +8,92 @@ import { ProcessManager } from '../core/ProcessManager';
 import { LogStreamer } from '../core/LogStreamer';
 import { DeployManager } from '../core/DeployManager';
 import { DebugController } from '../core/DebugController';
+import { PortUtils } from '../core/PortUtils';
+
+interface JavaRuntime {
+  name: string;
+  path: string;
+  default?: boolean;
+}
+
+/**
+ * java.configuration.runtimes에서 등록된 JDK 목록을 읽어온다.
+ */
+function getJavaRuntimes(): JavaRuntime[] {
+  const javaConfig = vscode.workspace.getConfiguration('java');
+  return javaConfig.get<JavaRuntime[]>('configuration.runtimes', []);
+}
+
+interface JavaHomeSelection {
+  path: string;
+  name?: string;
+}
+
+/**
+ * JDK 선택 QuickPick을 표시한다.
+ * 1) java.configuration.runtimes에 등록된 JDK가 있으면 → 명칭 기반 목록에서 선택 (default JDK가 맨 위)
+ * 2) 등록된 JDK가 없으면 → 설정 안내 + 직접 선택 제공
+ */
+async function selectJavaHome(): Promise<JavaHomeSelection | undefined> {
+  const runtimes = getJavaRuntimes();
+
+  if (runtimes.length > 0) {
+    // JDK가 등록되어 있음 → 명칭 기반 선택
+    const sorted = [...runtimes].sort((a, b) => {
+      if (a.default && !b.default) { return -1; }
+      if (!a.default && b.default) { return 1; }
+      return 0;
+    });
+
+    const items = [
+      ...sorted.map(r => ({
+        label: r.name,
+        description: r.default ? '(기본값)' : '',
+        runtimeName: r.name,
+        value: r.path,
+      })),
+      { label: '$(folder-opened) 로컬 JDK 직접 선택...', description: '', runtimeName: '', value: '__browse__' },
+    ];
+
+    const picked = await vscode.window.showQuickPick(items, {
+      placeHolder: 'JAVA_HOME 선택',
+    });
+    if (!picked) { return undefined; }
+
+    if (picked.value !== '__browse__') {
+      return { path: picked.value, name: picked.runtimeName };
+    }
+    // '__browse__' → 아래 파일 브라우저로 이동
+  } else {
+    // JDK가 등록되어 있지 않음 → 안내 + 선택지
+    const choice = await vscode.window.showQuickPick(
+      [
+        { label: '$(folder-opened) 로컬 JDK 직접 선택', description: '설치된 JDK 폴더를 선택합니다', value: 'browse' as const },
+        { label: '$(gear) java.configuration.runtimes 설정 열기', description: 'settings.json에서 JDK를 등록합니다', value: 'settings' as const },
+      ],
+      { placeHolder: 'java.configuration.runtimes에 등록된 JDK가 없습니다' },
+    );
+    if (!choice) { return undefined; }
+
+    if (choice.value === 'settings') {
+      await vscode.commands.executeCommand('workbench.action.openSettings', 'java.configuration.runtimes');
+      return undefined;
+    }
+    // 'browse' → 아래 파일 브라우저로 이동
+  }
+
+  // 파일 브라우저
+  const javaUri = await vscode.window.showOpenDialog({
+    canSelectFiles: false,
+    canSelectFolders: true,
+    canSelectMany: false,
+    openLabel: 'JAVA_HOME 디렉토리 선택',
+  });
+  if (javaUri && javaUri.length > 0) {
+    return { path: javaUri[0].fsPath };
+  }
+  return undefined;
+}
 
 async function pickServer(
   instanceManager: InstanceManager,
@@ -18,7 +104,13 @@ async function pickServer(
     servers = servers.filter(filter);
   }
   if (servers.length === 0) {
-    vscode.window.showInformationMessage('No matching servers.');
+    const action = await vscode.window.showInformationMessage(
+      '등록된 서버가 없습니다.',
+      '서버 추가',
+    );
+    if (action === '서버 추가') {
+      vscode.commands.executeCommand('tomCattery.addServer');
+    }
     return undefined;
   }
   const picked = await vscode.window.showQuickPick(
@@ -100,9 +192,10 @@ export function registerServerCommands(
         }
 
         // 3. Enter HTTP port
+        const defaultPort = vscode.workspace.getConfiguration('tomCattery').get<number>('defaultHttpPort', 8080);
         const httpPortStr = await vscode.window.showInputBox({
-          prompt: 'HTTP Port (other ports will be derived automatically)',
-          value: '8080',
+          prompt: 'HTTP 포트 (나머지 포트는 자동 계산됩니다)',
+          value: String(defaultPort),
           validateInput: (v) => {
             const n = parseInt(v);
             if (isNaN(n) || n < 1 || n > 65535) {
@@ -116,33 +209,56 @@ export function registerServerCommands(
         }
 
         const httpPort = parseInt(httpPortStr);
-        const ports: PortConfig = {
-          http: httpPort,
-          https: httpPort + 363,
-          shutdown: httpPort - 75,
-          ajp: httpPort - 71,
-          debug: httpPort - 80,
-        };
+        const ports: PortConfig = PortUtils.derivePorts(httpPort);
 
-        // 4. JAVA_HOME
-        let javaHome = process.env.JAVA_HOME || '';
-        if (!javaHome) {
-          const javaUri = await vscode.window.showOpenDialog({
-            canSelectFiles: false,
-            canSelectFolders: true,
-            canSelectMany: false,
-            openLabel: 'Select JAVA_HOME directory',
-          });
-          if (javaUri && javaUri.length > 0) {
-            javaHome = javaUri[0].fsPath;
+        // 3-1. 포트 충돌 감지
+        const existingInstances = instanceManager.getInstances();
+        const conflict = PortUtils.findConflict(ports, existingInstances);
+        const httpInUse = await PortUtils.isPortInUse(ports.http);
+
+        if (conflict || httpInUse) {
+          const reason = conflict || `HTTP 포트 ${ports.http}이(가) 이미 시스템에서 사용 중입니다.`;
+          const choice = await vscode.window.showQuickPick(
+            [
+              { label: '$(wand) 자동 할당', description: '사용 가능한 포트를 자동으로 찾습니다', value: 'auto' as const },
+              { label: '$(edit) 직접 입력', description: '다른 포트를 직접 입력합니다', value: 'manual' as const },
+            ],
+            { placeHolder: `⚠ ${reason}` },
+          );
+
+          if (!choice) { return; }
+
+          if (choice.value === 'auto') {
+            const available = await PortUtils.findAvailablePorts(ports.http + 1, existingInstances);
+            Object.assign(ports, available);
+            vscode.window.showInformationMessage(`자동 할당된 HTTP 포트: ${ports.http}`);
+          } else {
+            const newPortStr = await vscode.window.showInputBox({
+              prompt: `HTTP 포트 (${ports.http}은 사용 불가)`,
+              validateInput: (v) => {
+                const n = parseInt(v);
+                if (isNaN(n) || n < 1 || n > 65535) {
+                  return '포트는 1~65535 사이여야 합니다';
+                }
+                return undefined;
+              },
+            });
+            if (!newPortStr) { return; }
+            Object.assign(ports, PortUtils.derivePorts(parseInt(newPortStr)));
           }
+        }
+
+        // 4. JAVA_HOME (java.configuration.runtimes → 직접 선택)
+        const javaSelection = await selectJavaHome();
+        if (!javaSelection) {
+          return;
         }
 
         // 5. Create instance
         await vscode.window.withProgress(
           { location: vscode.ProgressLocation.Notification, title: `Creating server "${name}"...` },
           async () => {
-            await instanceManager.createInstance(name, selectedRuntime, ports, javaHome);
+            await instanceManager.createInstance(name, selectedRuntime, ports, javaSelection.path, javaSelection.name);
           },
         );
 
@@ -169,7 +285,13 @@ export function registerServerCommands(
       try {
         await processManager.startServer(instance);
       } catch (err: any) {
-        vscode.window.showErrorMessage(`Failed to start server: ${err.message}`);
+        const action = await vscode.window.showErrorMessage(
+          `서버 시작 실패: ${err.message}`,
+          '로그 보기',
+        );
+        if (action === '로그 보기') {
+          logStreamer.show(instance.name);
+        }
       }
     }),
 
@@ -182,7 +304,13 @@ export function registerServerCommands(
       try {
         await processManager.stopServer(instance);
       } catch (err: any) {
-        vscode.window.showErrorMessage(`Failed to stop server: ${err.message}`);
+        const action = await vscode.window.showErrorMessage(
+          `서버 중지 실패: ${err.message}`,
+          '로그 보기',
+        );
+        if (action === '로그 보기') {
+          logStreamer.show(instance.name);
+        }
       }
     }),
 
@@ -195,7 +323,13 @@ export function registerServerCommands(
       try {
         await processManager.restartServer(instance);
       } catch (err: any) {
-        vscode.window.showErrorMessage(`Failed to restart server: ${err.message}`);
+        const action = await vscode.window.showErrorMessage(
+          `서버 재시작 실패: ${err.message}`,
+          '로그 보기',
+        );
+        if (action === '로그 보기') {
+          logStreamer.show(instance.name);
+        }
       }
     }),
 
@@ -207,11 +341,17 @@ export function registerServerCommands(
       }
       try {
         await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: `Starting debug for "${instance.name}"...`, cancellable: false },
+          { location: vscode.ProgressLocation.Notification, title: `"${instance.name}" 디버그 시작 중...`, cancellable: false },
           () => debugController.debugServer(instance),
         );
       } catch (err: any) {
-        vscode.window.showErrorMessage(`Debug failed: ${err.message}`);
+        const action = await vscode.window.showErrorMessage(
+          `디버그 실패: ${err.message}`,
+          '로그 보기',
+        );
+        if (action === '로그 보기') {
+          logStreamer.show(instance.name);
+        }
       }
     }),
 

@@ -40,6 +40,7 @@ export class InstanceManager {
             debug: meta.debugPort,
           },
           javaHome: meta.javaHome || '',
+          javaHomeName: meta.javaHomeName || undefined,
           jvmArgs: meta.jvmArgs ? meta.jvmArgs.split(' ').filter(Boolean) : [],
           envVars: meta.envVars || {},
           deployments: meta.deployments || [],
@@ -78,6 +79,7 @@ export class InstanceManager {
     runtime: TomcatRuntime,
     ports: PortConfig,
     javaHome: string,
+    javaHomeName?: string,
   ): Promise<TomcatInstance> {
     const instanceDir = path.join(InstanceManager.BASE_DIR, name);
 
@@ -118,6 +120,7 @@ export class InstanceManager {
       ajpPort: ports.ajp,
       debugPort: ports.debug,
       javaHome,
+      javaHomeName: javaHomeName || undefined,
       jvmArgs: '',
       envVars: {},
       deployments: [],
@@ -144,6 +147,7 @@ export class InstanceManager {
       runtimePath: runtime.path,
       ports,
       javaHome,
+      javaHomeName,
       jvmArgs: [],
       envVars: {},
       deployments: [],
@@ -212,6 +216,7 @@ export class InstanceManager {
     meta.ajpPort = instance.ports.ajp;
     meta.debugPort = instance.ports.debug;
     meta.javaHome = instance.javaHome;
+    meta.javaHomeName = instance.javaHomeName || undefined;
     meta.jvmArgs = instance.jvmArgs.join(' ');
     meta.envVars = instance.envVars;
     meta.debug = instance.debug;
