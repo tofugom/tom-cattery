@@ -245,3 +245,11 @@ export interface TomcatRuntime {
 - Extension 번들링은 esbuild 사용 권장
 - 필수 의존 Extension: `redhat.java`, `vscjava.vscode-java-debug` (없으면 안내 메시지 표시)
 - Windows 지원을 고려하여 setenv.bat도 생성하고, 경로 구분자는 path.join() 사용
+
+---
+
+## 작업 이력 참조
+
+- 전체 작업 로그: `docs/WORKLOG.md` — Phase별 완료 항목, 버그 수정, UX 개선 이력이 기록되어 있음
+- 새 환경(다른 컴퓨터)에서 작업을 이어갈 때는 반드시 `docs/WORKLOG.md`를 먼저 읽고 현재 진행 상태를 파악할 것
+- 현재 브랜치: `feature/phase-1`, publisher: `tofu9`, 버전: `0.1.0`
