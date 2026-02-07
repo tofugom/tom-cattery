@@ -351,6 +351,67 @@ export class InstanceManager {
     }
   }
 
+  async cloneInstance(sourceName: string, newName: string, newPorts: PortConfig): Promise<TomcatInstance> {
+    const source = this.instances.find(i => i.name === sourceName);
+    if (!source) {
+      throw new Error(`소스 서버 "${sourceName}"을 찾을 수 없습니다.`);
+    }
+
+    const sourceDir = path.join(this.baseDir, sourceName);
+    const newDir = path.join(this.baseDir, newName);
+
+    // 1. 전체 디렉토리 복사
+    await this.copyDir(sourceDir, newDir);
+
+    // 2. webapps, logs, work, temp 클린업 (배포/캐시는 복제하지 않음)
+    for (const dir of ['webapps', 'logs', 'work', 'temp']) {
+      const dirPath = path.join(newDir, dir);
+      await fs.rm(dirPath, { recursive: true, force: true });
+      await fs.mkdir(dirPath, { recursive: true });
+    }
+
+    // 3. server.xml 포트 패치 (소스 포트 → 새 포트)
+    const serverXmlPath = path.join(newDir, 'conf', 'server.xml');
+    await ConfigParser.updateServerXmlPorts(serverXmlPath, source.ports, newPorts);
+
+    // 4. .tom-cattery.json 업데이트
+    const metaPath = path.join(newDir, '.tom-cattery.json');
+    const metaContent = await fs.readFile(metaPath, 'utf-8');
+    const meta = JSON.parse(metaContent);
+    meta.name = newName;
+    meta.httpPort = newPorts.http;
+    meta.httpsPort = newPorts.https;
+    meta.shutdownPort = newPorts.shutdown;
+    meta.ajpPort = newPorts.ajp;
+    meta.debugPort = newPorts.debug;
+    meta.debug = { ...meta.debug, port: newPorts.debug };
+    meta.deployments = []; // 배포 설정은 초기화
+    meta.createdAt = new Date().toISOString();
+    await fs.writeFile(metaPath, JSON.stringify(meta, null, 2), 'utf-8');
+
+    // 5. setenv.sh/bat 재생성
+    const newInstance: TomcatInstance = {
+      name: newName,
+      basePath: newDir,
+      runtimePath: source.runtimePath,
+      ports: newPorts,
+      javaHome: source.javaHome,
+      javaHomeName: source.javaHomeName,
+      jvmArgs: [...source.jvmArgs],
+      envVars: { ...source.envVars },
+      deployments: [],
+      debug: { ...source.debug, port: newPorts.debug },
+      timeouts: { ...source.timeouts },
+      status: 'stopped',
+    };
+
+    await this.regenerateSetenvSh(newInstance);
+    await this.regenerateSetenvBat(newInstance);
+
+    this.instances.push(newInstance);
+    return newInstance;
+  }
+
   async deleteInstance(name: string): Promise<void> {
     const instanceDir = path.join(this.baseDir, name);
     await fs.rm(instanceDir, { recursive: true, force: true });
