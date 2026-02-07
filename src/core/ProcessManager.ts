@@ -48,12 +48,15 @@ export class ProcessManager {
     let startupDetected = false;
     const targetStatus: TomcatInstance['status'] = isDebug ? 'debugging' : 'running';
 
+    let startTimeout: ReturnType<typeof setTimeout> | undefined;
+
     const markStarted = (source: string) => {
       if (startupDetected) {
         return;
       }
       startupDetected = true;
       clearInterval(httpPollInterval);
+      if (startTimeout) { clearTimeout(startTimeout); }
       console.log(`[Tom Cattery] Startup detected (${source})! Transitioning to "${targetStatus}"`);
       this.onStatusChange(instance.name, targetStatus, proc.pid);
     };
@@ -88,6 +91,17 @@ export class ProcessManager {
       socket.connect(instance.ports.http, 'localhost');
     }, 2000);
 
+    // Start timeout: warn if startup not detected within configured time
+    const startTimeoutMs = (instance.timeouts?.start ?? 45) * 1000;
+    startTimeout = setTimeout(() => {
+      if (!startupDetected && this.processes.has(instance.name)) {
+        channel.appendLine(`[Tom Cattery] WARNING: Server startup not detected within ${instance.timeouts?.start ?? 45}s. The server may still be starting.`);
+        vscode.window.showWarningMessage(
+          `Server "${instance.name}" has not started within ${instance.timeouts?.start ?? 45}s. It may still be starting — check the logs.`,
+        );
+      }
+    }, startTimeoutMs);
+
     proc.stdout?.on('data', (data: Buffer) => {
       const text = data.toString();
       channel.append(text);
@@ -102,6 +116,7 @@ export class ProcessManager {
 
     proc.on('error', (err) => {
       clearInterval(httpPollInterval);
+      if (startTimeout) { clearTimeout(startTimeout); }
       channel.appendLine(`[Tom Cattery] Error: ${err.message}`);
       this.processes.delete(instance.name);
       this.stoppingServers.delete(instance.name);
@@ -110,6 +125,7 @@ export class ProcessManager {
 
     proc.on('close', (code) => {
       clearInterval(httpPollInterval);
+      if (startTimeout) { clearTimeout(startTimeout); }
       const wasStopping = this.stoppingServers.delete(instance.name);
       this.processes.delete(instance.name);
 
@@ -143,7 +159,8 @@ export class ProcessManager {
     const env = this.buildEnv(instance);
     spawn(script, ['stop'], { env, shell: true });
 
-    // Wait for process to exit, force kill after 15s
+    // Wait for process to exit, force kill after stop timeout
+    const stopTimeoutMs = (instance.timeouts?.stop ?? 15) * 1000;
     return new Promise<void>((resolve) => {
       if (!this.processes.has(instance.name)) {
         resolve();
@@ -156,7 +173,7 @@ export class ProcessManager {
           runningProc.kill('SIGKILL');
         }
         resolve();
-      }, 15000);
+      }, stopTimeoutMs);
 
       runningProc.on('close', () => {
         clearTimeout(timeout);
