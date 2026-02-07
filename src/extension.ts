@@ -195,12 +195,20 @@ export async function activate(context: vscode.ExtensionContext) {
         console.log(`[Tom Cattery] Server "${name}" is ${status}. Setting up watchers (${autoCount} auto-deploy deployment(s))`);
         deployManager!.setupWatchers(inst);
 
-        // 사용자가 직접 시작한 경우에만 브라우저 열기
+        // 사용자가 직접 시작한 경우에만 브라우저 열기 (배포별 context path)
         if (pendingBrowserOpen.delete(name)) {
           const openBrowser = vscode.workspace.getConfiguration('tomCattery')
             .get<boolean>('openBrowserOnStart', true);
           if (openBrowser) {
-            vscode.env.openExternal(vscode.Uri.parse(`http://localhost:${inst.ports.http}/`));
+            const base = `http://localhost:${inst.ports.http}`;
+            if (inst.deployments.length === 0) {
+              vscode.env.openExternal(vscode.Uri.parse(`${base}/`));
+            } else {
+              for (const dep of inst.deployments) {
+                const ctxPath = dep.contextPath.startsWith('/') ? dep.contextPath : `/${dep.contextPath}`;
+                vscode.env.openExternal(vscode.Uri.parse(`${base}${ctxPath}`));
+              }
+            }
           }
         }
       }
