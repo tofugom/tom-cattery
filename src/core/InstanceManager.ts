@@ -1,7 +1,7 @@
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs/promises';
-import { TomcatInstance, TomcatRuntime, PortConfig, Deployment } from '../types';
+import { TomcatInstance, TomcatRuntime, PortConfig, Deployment, TimeoutConfig } from '../types';
 import { ConfigParser } from './ConfigParser';
 
 export class InstanceManager {
@@ -50,6 +50,7 @@ export class InstanceManager {
             autoAttach: true,
             sourcePaths: [],
           },
+          timeouts: meta.timeouts || { start: 45, stop: 15 },
           status: 'stopped',
         });
       } catch {
@@ -127,6 +128,7 @@ export class InstanceManager {
         autoAttach: true,
         sourcePaths: [],
       },
+      timeouts: { start: 45, stop: 15 },
       createdAt: new Date().toISOString(),
     };
 
@@ -146,6 +148,7 @@ export class InstanceManager {
       envVars: {},
       deployments: [],
       debug: metadata.debug,
+      timeouts: metadata.timeouts,
       status: 'stopped',
     };
 
@@ -212,6 +215,7 @@ export class InstanceManager {
     meta.jvmArgs = instance.jvmArgs.join(' ');
     meta.envVars = instance.envVars;
     meta.debug = instance.debug;
+    meta.timeouts = instance.timeouts;
     meta.deployments = instance.deployments;
 
     await fs.writeFile(metaPath, JSON.stringify(meta, null, 2), 'utf-8');

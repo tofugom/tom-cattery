@@ -8,8 +8,14 @@ export interface TomcatInstance {
   envVars: Record<string, string>;
   deployments: Deployment[];
   debug: DebugConfig;
+  timeouts: TimeoutConfig;
   status: 'stopped' | 'starting' | 'running' | 'stopping' | 'debugging';
   pid?: number;
+}
+
+export interface TimeoutConfig {
+  start: number;  // seconds, default 45
+  stop: number;   // seconds, default 15
 }
 
 export interface PortConfig {
