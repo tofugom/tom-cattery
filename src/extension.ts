@@ -317,7 +317,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
   processManager = new ProcessManager(logStreamer, onStatusChange);
   debugController = new DebugController(processManager, instanceManager, logStreamer, onStatusChange);
-  configWebviewProvider = new ConfigWebviewProvider(instanceManager, processManager, serverTreeProvider);
+  configWebviewProvider = new ConfigWebviewProvider(instanceManager, processManager, serverTreeProvider, context.extensionUri);
 
   registerServerCommands(
     context,
