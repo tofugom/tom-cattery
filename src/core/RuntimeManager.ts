@@ -23,6 +23,10 @@ export class RuntimeManager {
     return [...this.runtimes];
   }
 
+  clearRuntimes(): void {
+    this.runtimes = [];
+  }
+
   /** 다운로드 / 로컬 선택 분기 */
   async addRuntime(): Promise<TomcatRuntime | undefined> {
     const pick = await vscode.window.showQuickPick([

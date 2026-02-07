@@ -120,6 +120,21 @@
         "command": "tomCattery.deleteServer",
         "title": "Tom Cattery: Delete Server",
         "icon": "$(trash)"
+      },
+      {
+        "command": "tomCattery.resetGlobalStorage",
+        "title": "Tom Cattery: Reset All Data",
+        "icon": "$(warning)"
+      },
+      {
+        "command": "tomCattery.exportConfig",
+        "title": "Tom Cattery: Export Server Config",
+        "icon": "$(export)"
+      },
+      {
+        "command": "tomCattery.importConfig",
+        "title": "Tom Cattery: Import Server Config",
+        "icon": "$(import)"
       }
     ],
     "viewsWelcome": [
@@ -147,6 +162,16 @@
       "view/title": [
         {
           "command": "tomCattery.addServer",
+          "when": "view == tomCattery.servers",
+          "group": "navigation"
+        },
+        {
+          "command": "tomCattery.importConfig",
+          "when": "view == tomCattery.servers",
+          "group": "navigation"
+        },
+        {
+          "command": "tomCattery.exportConfig",
           "when": "view == tomCattery.servers",
           "group": "navigation"
         }
@@ -196,6 +221,11 @@
           "command": "tomCattery.openLogs",
           "when": "view == tomCattery.servers && viewItem =~ /server-.*/",
           "group": "2_config@2"
+        },
+        {
+          "command": "tomCattery.exportConfig",
+          "when": "view == tomCattery.servers && viewItem =~ /server-.*/",
+          "group": "2_config@3"
         },
         {
           "command": "tomCattery.deleteServer",

@@ -51,3 +51,24 @@ export interface TomcatRuntime {
   type: 'local' | 'downloaded';
   majorVersion: number;
 }
+
+export interface TomCatteryExportData {
+  version: 1;
+  exportedAt: string;
+  servers: TomCatteryServerExport[];
+}
+
+export interface TomCatteryServerExport {
+  name: string;
+  runtimePath: string;
+  runtimeVersion?: string;
+  runtimeType?: 'local' | 'downloaded';
+  javaHome: string;
+  javaHomeName?: string;
+  ports: PortConfig;
+  jvmArgs: string[];
+  envVars: Record<string, string>;
+  deployments: Deployment[];
+  debug: DebugConfig;
+  timeouts: TimeoutConfig;
+}

@@ -1,5 +1,8 @@
 import * as vscode from 'vscode';
-import { TomcatInstance, PortConfig, Deployment } from '../types';
+import * as fs from 'fs/promises';
+import * as path from 'path';
+import * as os from 'os';
+import { TomcatInstance, PortConfig, Deployment, TomcatRuntime, TomCatteryExportData, TomCatteryServerExport } from '../types';
 import { ServerTreeProvider, ServerTreeItem, DeploymentTreeItem } from '../views/ServerTreeProvider';
 import { ConfigWebviewProvider } from '../views/ConfigWebviewProvider';
 import { RuntimeManager } from '../core/RuntimeManager';
@@ -771,5 +774,339 @@ export function registerServerCommands(
         }
       }
     }),
+
+    // ── Reset Global Storage ──
+    vscode.commands.registerCommand('tomCattery.resetGlobalStorage', async () => {
+      // 1. 1차 확인
+      const confirm1 = await vscode.window.showWarningMessage(
+        '모든 Tom Cattery 데이터(서버, 런타임, 설정)가 삭제됩니다. 이 작업은 되돌릴 수 없습니다.',
+        { modal: true },
+        '계속',
+      );
+      if (confirm1 !== '계속') { return; }
+
+      // 2. 2차 확인: "RESET" 타이핑
+      const typed = await vscode.window.showInputBox({
+        prompt: '초기화를 진행하려면 "RESET"을 입력하세요',
+        placeHolder: 'RESET',
+        validateInput: (v) => v === 'RESET' ? undefined : '"RESET"을 정확히 입력해주세요',
+      });
+      if (typed !== 'RESET') { return; }
+
+      // 3. 실행 중인 서버 중지
+      const runningServers = instanceManager.getInstances().filter(
+        i => processManager.isRunning(i.name),
+      );
+      if (runningServers.length > 0) {
+        const stopConfirm = await vscode.window.showWarningMessage(
+          `${runningServers.length}개의 서버가 실행 중입니다. 모두 중지 후 초기화합니다.`,
+          { modal: true },
+          '중지 후 초기화',
+        );
+        if (stopConfirm !== '중지 후 초기화') { return; }
+
+        await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: '서버 중지 중...' },
+          async () => {
+            for (const server of runningServers) {
+              try { await processManager.stopServer(server); } catch { /* ignore */ }
+            }
+            processManager.killAll();
+          },
+        );
+      }
+
+      // 4. 리소스 정리
+      deployManager.disposeAllWatchers();
+      debugController.disposeAll();
+      logStreamer.disposeAll();
+      configWebviewProvider.dispose();
+
+      // 5. 데이터 삭제
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: 'Tom Cattery 데이터 초기화 중...' },
+        async () => {
+          const globalStoragePath = context.globalStorageUri.fsPath;
+          await fs.rm(globalStoragePath, { recursive: true, force: true });
+          await context.globalState.update('tomcatRuntimes', undefined);
+        },
+      );
+
+      // 6. 인메모리 상태 초기화
+      runtimeManager.clearRuntimes();
+      await instanceManager.loadInstances();
+      treeProvider.setServers(instanceManager.getInstances());
+
+      vscode.window.showInformationMessage('Tom Cattery 데이터가 초기화되었습니다. 모든 서버와 런타임이 삭제되었습니다.');
+    }),
+
+    // ── Export Config ──
+    vscode.commands.registerCommand('tomCattery.exportConfig', async (item?: ServerTreeItem) => {
+      const instances = instanceManager.getInstances();
+      if (instances.length === 0) {
+        vscode.window.showInformationMessage('내보낼 서버가 없습니다.');
+        return;
+      }
+
+      // Export 대상 결정
+      let serversToExport: TomcatInstance[];
+
+      if (item?.instance) {
+        serversToExport = [item.instance];
+      } else {
+        const choices = [
+          { label: '$(server-environment) 전체 서버 내보내기', description: `${instances.length}개 서버`, value: '__all__' },
+          ...instances.map(i => ({
+            label: i.name,
+            description: `:${i.ports.http} (${i.status})`,
+            value: i.name,
+          })),
+        ];
+        const picked = await vscode.window.showQuickPick(choices, {
+          placeHolder: '내보낼 서버를 선택하세요',
+        });
+        if (!picked) { return; }
+
+        if (picked.value === '__all__') {
+          serversToExport = instances;
+        } else {
+          const found = instances.find(i => i.name === picked.value);
+          if (!found) { return; }
+          serversToExport = [found];
+        }
+      }
+
+      // Export 데이터 구성
+      const runtimes = runtimeManager.getRuntimes();
+      const exportData: TomCatteryExportData = {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        servers: serversToExport.map(inst => {
+          const rt = runtimes.find(r => r.path === inst.runtimePath);
+          return {
+            name: inst.name,
+            runtimePath: inst.runtimePath,
+            runtimeVersion: rt?.version,
+            runtimeType: rt?.type,
+            javaHome: inst.javaHome,
+            javaHomeName: inst.javaHomeName,
+            ports: { ...inst.ports },
+            jvmArgs: [...inst.jvmArgs],
+            envVars: { ...inst.envVars },
+            deployments: inst.deployments.map(d => ({ ...d })),
+            debug: { ...inst.debug },
+            timeouts: { ...inst.timeouts },
+          };
+        }),
+      };
+
+      const defaultName = serversToExport.length === 1
+        ? `tom-cattery-${serversToExport[0].name}.json`
+        : 'tom-cattery-export.json';
+
+      const uri = await vscode.window.showSaveDialog({
+        defaultUri: vscode.Uri.file(
+          path.join(
+            vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || os.homedir(),
+            defaultName,
+          ),
+        ),
+        filters: { 'JSON files': ['json'] },
+        title: '서버 설정 내보내기',
+      });
+      if (!uri) { return; }
+
+      await fs.writeFile(uri.fsPath, JSON.stringify(exportData, null, 2), 'utf-8');
+      vscode.window.showInformationMessage(
+        `${serversToExport.length}개 서버 설정을 ${path.basename(uri.fsPath)}에 내보냈습니다.`,
+      );
+    }),
+
+    // ── Import Config ──
+    vscode.commands.registerCommand('tomCattery.importConfig', async () => {
+      // 1. 파일 선택
+      const fileUris = await vscode.window.showOpenDialog({
+        canSelectFiles: true,
+        canSelectFolders: false,
+        canSelectMany: false,
+        filters: { 'JSON files': ['json'] },
+        openLabel: '설정 파일 선택',
+      });
+      if (!fileUris || fileUris.length === 0) { return; }
+
+      // 2. 파일 파싱
+      let exportData: TomCatteryExportData;
+      try {
+        const content = await fs.readFile(fileUris[0].fsPath, 'utf-8');
+        exportData = JSON.parse(content);
+      } catch (err: any) {
+        vscode.window.showErrorMessage(`설정 파일을 읽을 수 없습니다: ${err.message}`);
+        return;
+      }
+
+      // 3. 포맷 검증
+      if (!exportData.version || !Array.isArray(exportData.servers) || exportData.servers.length === 0) {
+        vscode.window.showErrorMessage('유효하지 않은 Tom Cattery 설정 파일입니다.');
+        return;
+      }
+
+      // 4. Import할 서버 선택
+      const serverItems = exportData.servers.map(s => ({
+        label: s.name,
+        description: `HTTP:${s.ports.http} | Runtime: ${s.runtimeVersion || 'unknown'}`,
+        picked: true,
+        serverData: s,
+      }));
+
+      const pickedServers = await vscode.window.showQuickPick(serverItems, {
+        placeHolder: `가져올 서버를 선택하세요 (${exportData.servers.length}개 포함)`,
+        canPickMany: true,
+      });
+      if (!pickedServers || pickedServers.length === 0) { return; }
+
+      // 5. Import 실행
+      let imported = 0;
+      let skipped = 0;
+
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: '서버 설정 가져오는 중...' },
+        async (progress) => {
+          for (const item of pickedServers) {
+            progress.report({ message: `${item.serverData.name} (${imported + skipped + 1}/${pickedServers.length})` });
+            try {
+              await importSingleServer(item.serverData);
+              imported++;
+            } catch (err: any) {
+              if (err.message !== 'Skipped by user') {
+                vscode.window.showWarningMessage(`"${item.serverData.name}" 가져오기 실패: ${err.message}`);
+              }
+              skipped++;
+            }
+          }
+        },
+      );
+
+      treeProvider.setServers(instanceManager.getInstances());
+      if (imported > 0) {
+        vscode.window.showInformationMessage(
+          `${imported}개 서버를 가져왔습니다.` + (skipped > 0 ? ` (${skipped}개 스킵)` : ''),
+        );
+      }
+    }),
   );
+
+  // ── Import 헬퍼 ──
+  async function importSingleServer(serverExport: TomCatteryServerExport): Promise<void> {
+    // 이름 충돌 확인
+    const existing = instanceManager.getInstance(serverExport.name);
+    if (existing) {
+      const action = await vscode.window.showWarningMessage(
+        `서버 "${serverExport.name}"이(가) 이미 존재합니다. 덮어쓸까요?`,
+        { modal: true },
+        '덮어쓰기',
+        '건너뛰기',
+      );
+      if (action !== '덮어쓰기') {
+        throw new Error('Skipped by user');
+      }
+      if (processManager.isRunning(serverExport.name)) {
+        await processManager.stopServer(existing);
+      }
+      logStreamer.disposeChannel(serverExport.name);
+      deployManager.disposeWatchers(serverExport.name);
+      await instanceManager.deleteInstance(serverExport.name);
+    }
+
+    // runtimePath 유효성 확인
+    let runtimePath = serverExport.runtimePath;
+    const runtimeValid = await runtimeManager.validateRuntime(runtimePath);
+
+    if (!runtimeValid.valid) {
+      const action = await vscode.window.showWarningMessage(
+        `"${serverExport.name}"의 Runtime 경로가 유효하지 않습니다: ${runtimePath}`,
+        'Runtime 선택',
+        '건너뛰기',
+      );
+      if (action !== 'Runtime 선택') {
+        throw new Error('Runtime not available');
+      }
+
+      const runtimes = runtimeManager.getRuntimes();
+      if (runtimes.length > 0) {
+        const items = [
+          ...runtimes.map(r => ({
+            label: `Apache Tomcat ${r.version}`,
+            description: r.type === 'downloaded' ? '(다운로드됨)' : r.path,
+            runtime: r,
+            id: 'existing' as const,
+          })),
+          { label: '$(folder-opened) 로컬 Runtime 선택...', description: '', runtime: undefined as any, id: 'browse' as const },
+        ];
+        const picked = await vscode.window.showQuickPick(items, {
+          placeHolder: 'Tomcat Runtime을 선택하세요',
+        });
+        if (!picked) { throw new Error('Runtime not selected'); }
+
+        if (picked.id === 'browse') {
+          const addedRuntime = await runtimeManager.addLocalRuntime();
+          if (!addedRuntime) { throw new Error('Runtime not selected'); }
+          runtimePath = addedRuntime.path;
+        } else {
+          runtimePath = picked.runtime.path;
+        }
+      } else {
+        const addedRuntime = await runtimeManager.addLocalRuntime();
+        if (!addedRuntime) { throw new Error('Runtime not selected'); }
+        runtimePath = addedRuntime.path;
+      }
+    }
+
+    // javaHome 유효성 확인
+    let javaHome = serverExport.javaHome;
+    let javaHomeName = serverExport.javaHomeName;
+
+    try {
+      await fs.access(javaHome);
+    } catch {
+      const action = await vscode.window.showWarningMessage(
+        `"${serverExport.name}"의 JAVA_HOME이 유효하지 않습니다: ${javaHome}`,
+        'JAVA_HOME 선택',
+        '건너뛰기',
+      );
+      if (action !== 'JAVA_HOME 선택') {
+        throw new Error('JAVA_HOME not available');
+      }
+
+      const javaSelection = await selectJavaHome();
+      if (!javaSelection) { throw new Error('JAVA_HOME not selected'); }
+      javaHome = javaSelection.path;
+      javaHomeName = javaSelection.name;
+    }
+
+    // 서버 생성 (createInstance: 디렉터리 생성, conf 복사, server.xml 패치, setenv 생성)
+    const runtimeForCreate: TomcatRuntime = {
+      version: serverExport.runtimeVersion || 'unknown',
+      path: runtimePath,
+      type: serverExport.runtimeType || 'local',
+      majorVersion: parseInt((serverExport.runtimeVersion || '0').split('.')[0]) || 0,
+    };
+
+    const instance = await instanceManager.createInstance(
+      serverExport.name,
+      runtimeForCreate,
+      serverExport.ports,
+      javaHome,
+      javaHomeName,
+    );
+
+    // 추가 설정 적용 (createInstance가 설정하지 않는 항목들)
+    instance.jvmArgs = serverExport.jvmArgs || [];
+    instance.envVars = serverExport.envVars || {};
+    instance.deployments = serverExport.deployments || [];
+    instance.debug = serverExport.debug || instance.debug;
+    instance.timeouts = serverExport.timeouts || instance.timeouts;
+
+    // 전체 설정 저장 (.tom-cattery.json + server.xml + setenv 반영)
+    await instanceManager.saveFullConfig(instance);
+  }
 }
