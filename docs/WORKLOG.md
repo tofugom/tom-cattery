@@ -295,3 +295,37 @@
 - LICENSE: MIT 라이선스
 - .vscodeignore: jest.config.js, __tests__, 설계 문서 제외
 - VSIX 패키징 성공: tom-cattery-0.1.0.vsix (228 KB)
+
+---
+
+## 후속 개선: 버그 수정 + UX 개선 (완료)
+
+**작업일**: 2026-02-07
+**브랜치**: feature/phase-1
+
+### 버그 수정
+- **publisher 변경 마이그레이션**: publisher가 `woongki` → `tofu9`로 변경되면서 globalStorage 경로 불일치 발생. `migrateFromOldPublisher()` 함수로 기존 데이터 자동 이전
+- **Gradle deployment TreeView 라벨 누락**: `warPath.includes('*')` 분기 추가하여 프로젝트명 표시
+- **Webview 템플릿 리터럴 충돌**: `${CATALINA_BASE}` 문자열이 TypeScript 보간으로 해석되어 "Webview is disposed" 에러 → 일반 텍스트로 변경
+
+### 신규 기능
+- **워크스페이스 설정 저장/감지**: `tomCattery.saveToWorkspace` 커맨드 → `.vscode/tom-cattery.json` 저장. Extension 활성화 시 파일 감지하여 Import 제안
+- **Config Webview 배포 경로 표시**: Deploy Path를 `CATALINA_BASE/webapps/{contextDir}` 형식으로 표시 + 폴더 열기 버튼
+
+### UX 개선
+- **codicon 아이콘 통일**: `@vscode/codicons` 패키지 도입. 이모지(📁🗑) → VSCode 네이티브 아이콘 (`codicon-folder-opened`, `codicon-trash`, `codicon-settings-gear`)
+- **읽기전용 필드 텍스트화**: Server Name, Catalina Home, Catalina Base, Deploy Path → `<input readonly>` 제거, `<span class="field-value">` 텍스트로 변경. 편집 가능/불가 시각적 구분
+- **버튼 아이콘화**: "Browse...", "Remove", "변경..." 등 텍스트 버튼을 모두 codicon 아이콘 버튼으로 교체
+- **import/export 커맨드 아이콘 변경**: `$(download)` / `$(arrow-up)`
+
+### 커밋 이력
+- `16a2895` fix: publisher를 tofu9로 변경 + globalStorage 경로 마이그레이션
+- `f553c7b` fix: Gradle 배포 시 TreeView에 프로젝트명 표시
+- `4a80cfe` feat: 워크스페이스 설정 저장/감지 기능
+- `b8cb0f2` feat: Config Webview에 배포 경로 표시 + 폴더 열기 기능
+- `e3ddb15` refactor: Config Webview 버튼 아이콘 통일 + Deploy Path 개선
+- `b246dd7` refactor: Config Webview UX 개선 — codicon 아이콘 + 읽기전용 필드 텍스트화
+
+### 최종 빌드
+- VSIX 패키징 성공: tom-cattery-0.1.0.vsix (298 KB, 56 files)
+- 다음 작업: Windows 환경 테스트
