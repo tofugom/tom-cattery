@@ -1,36 +1,38 @@
 import * as path from 'path';
-import * as os from 'os';
 import * as fs from 'fs/promises';
 import { TomcatInstance, TomcatRuntime, PortConfig, Deployment, TimeoutConfig } from '../types';
 import { ConfigParser } from './ConfigParser';
 
 export class InstanceManager {
-  static readonly BASE_DIR = path.join(os.homedir(), '.vscode', 'tom-cattery', 'servers');
-
+  readonly baseDir: string;
   private instances: TomcatInstance[] = [];
+
+  constructor(globalStoragePath: string) {
+    this.baseDir = path.join(globalStoragePath, 'servers');
+  }
 
   async loadInstances(): Promise<TomcatInstance[]> {
     this.instances = [];
 
     try {
-      await fs.access(InstanceManager.BASE_DIR);
+      await fs.access(this.baseDir);
     } catch {
       return [];
     }
 
-    const entries = await fs.readdir(InstanceManager.BASE_DIR, { withFileTypes: true });
+    const entries = await fs.readdir(this.baseDir, { withFileTypes: true });
 
     for (const entry of entries) {
       if (!entry.isDirectory()) {
         continue;
       }
-      const metaPath = path.join(InstanceManager.BASE_DIR, entry.name, '.tom-cattery.json');
+      const metaPath = path.join(this.baseDir, entry.name, '.tom-cattery.json');
       try {
         const content = await fs.readFile(metaPath, 'utf-8');
         const meta = JSON.parse(content);
         this.instances.push({
           name: meta.name,
-          basePath: path.join(InstanceManager.BASE_DIR, entry.name),
+          basePath: path.join(this.baseDir, entry.name),
           runtimePath: meta.runtimePath,
           ports: {
             http: meta.httpPort,
@@ -81,7 +83,7 @@ export class InstanceManager {
     javaHome: string,
     javaHomeName?: string,
   ): Promise<TomcatInstance> {
-    const instanceDir = path.join(InstanceManager.BASE_DIR, name);
+    const instanceDir = path.join(this.baseDir, name);
 
     // Create directory structure
     const dirs = ['conf', 'bin', 'webapps', 'logs', 'work', 'temp'];
@@ -345,7 +347,7 @@ export class InstanceManager {
   }
 
   async deleteInstance(name: string): Promise<void> {
-    const instanceDir = path.join(InstanceManager.BASE_DIR, name);
+    const instanceDir = path.join(this.baseDir, name);
     await fs.rm(instanceDir, { recursive: true, force: true });
     this.instances = this.instances.filter(i => i.name !== name);
   }
