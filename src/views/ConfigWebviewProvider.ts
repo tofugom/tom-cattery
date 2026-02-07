@@ -394,21 +394,6 @@ export class ConfigWebviewProvider {
   }
   .env-table td { padding: 4px 8px; }
   .env-table input { width: 100%; }
-  .env-table .remove-btn,
-  .remove-btn {
-    padding: 2px 8px;
-    background: transparent;
-    color: var(--vscode-errorForeground, #f44);
-    border: 1px solid var(--vscode-errorForeground, #f44);
-    border-radius: 2px;
-    cursor: pointer;
-    font-size: 0.85em;
-  }
-  .env-table .remove-btn:hover,
-  .remove-btn:hover {
-    background: var(--vscode-errorForeground, #f44);
-    color: var(--vscode-editor-background);
-  }
   .add-btn {
     margin-top: 4px;
     padding: 4px 10px;
@@ -519,20 +504,30 @@ export class ConfigWebviewProvider {
     font-size: 1em;
     line-height: 1;
     opacity: 0.8;
+    flex-shrink: 0;
   }
   .btn-icon:hover {
     opacity: 1;
     background: var(--vscode-button-secondaryBackground);
   }
-  .deploy-path {
-    font-size: 0.85em;
-    opacity: 0.7;
-    font-family: var(--vscode-editor-font-family, monospace);
-    margin-left: 108px;
-    margin-bottom: 8px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
+  .btn-icon-danger {
+    padding: 4px 6px;
+    background: transparent;
+    border: 1px solid var(--vscode-errorForeground, #f44);
+    border-radius: 2px;
+    cursor: pointer;
+    color: var(--vscode-errorForeground, #f44);
+    font-size: 1em;
+    line-height: 1;
+    flex-shrink: 0;
+  }
+  .btn-icon-danger:hover {
+    background: var(--vscode-errorForeground, #f44);
+    color: var(--vscode-editor-background);
+  }
+  .field input[readonly] {
+    opacity: 0.8;
+    cursor: default;
   }
 </style>
 </head>
@@ -566,7 +561,7 @@ export class ConfigWebviewProvider {
         <input type="text" id="javaHomeDisplay" readonly style="flex:2;" />
         <input type="hidden" id="javaHome" />
         <input type="hidden" id="javaHomeName" />
-        <button class="secondary" id="browseJavaHome">변경...</button>
+        <button class="btn-icon" id="browseJavaHome" title="Java Home 변경">&#128193;</button>
       </div>
     </div>
 
@@ -698,7 +693,7 @@ export class ConfigWebviewProvider {
     tr.innerHTML =
       '<td><input type="text" class="env-key" value="' + escapeAttr(key || '') + '" placeholder="KEY" /></td>' +
       '<td><input type="text" class="env-val" value="' + escapeAttr(value || '') + '" placeholder="value" /></td>' +
-      '<td><button class="remove-btn" onclick="this.closest(\\'tr\\').remove()">Remove</button></td>';
+      '<td><button class="btn-icon-danger" onclick="this.closest(\\'tr\\').remove()" title="삭제">&#128465;</button></td>';
     tbody.appendChild(tr);
   }
 
@@ -723,16 +718,12 @@ export class ConfigWebviewProvider {
     const warName = (dep.warPath || '').split('/').pop().split('\\\\').pop().replace(/\\.war$/, '') || 'deployment';
 
     const ctxDir = contextPathToDir(dep.contextPath || '/');
-    const displayPath = 'webapps/' + ctxDir;
+    const displayPath = 'CATALINA_BASE/webapps/' + ctxDir;
 
     card.innerHTML =
       '<div class="card-header">' +
         '<span class="card-title">' + escapeHtml(warName) + '</span>' +
-        '<button class="remove-btn btn-remove-deploy" data-index="' + index + '">Remove</button>' +
-      '</div>' +
-      '<div class="deploy-path">' +
-        '<span class="dep-deployPath">' + escapeHtml(displayPath) + '</span>' +
-        '<button class="btn-icon btn-open-deploy" title="배포 폴더 열기">&#128193;</button>' +
+        '<button class="btn-icon-danger btn-remove-deploy" data-index="' + index + '" title="삭제">&#128465;</button>' +
       '</div>' +
       '<div class="field">' +
         '<label>Context Path</label>' +
@@ -741,7 +732,12 @@ export class ConfigWebviewProvider {
       '<div class="field">' +
         '<label>WAR Path</label>' +
         '<input type="text" class="dep-warPath" value="' + escapeAttr(dep.warPath || '') + '" placeholder="/path/to/app.war" />' +
-        '<button class="secondary btn-browse-war" data-index="' + index + '">Browse...</button>' +
+        '<button class="btn-icon btn-browse-war" data-index="' + index + '" title="WAR 파일 선택">&#128193;</button>' +
+      '</div>' +
+      '<div class="field">' +
+        '<label>Deploy Path</label>' +
+        '<input type="text" class="dep-deployPath" value="' + escapeAttr(displayPath) + '" readonly />' +
+        '<button class="btn-icon btn-open-deploy" title="배포 폴더 열기">&#128193;</button>' +
       '</div>' +
       '<div class="field">' +
         '<label>Build Task</label>' +
@@ -771,7 +767,7 @@ export class ConfigWebviewProvider {
     // Update deploy path when context path changes
     card.querySelector('.dep-contextPath').addEventListener('input', (e) => {
       const ctxPath = e.target.value || '/';
-      card.querySelector('.dep-deployPath').textContent = 'webapps/' + contextPathToDir(ctxPath);
+      card.querySelector('.dep-deployPath').value = 'CATALINA_BASE/webapps/' + contextPathToDir(ctxPath);
     });
 
     // Remove button
