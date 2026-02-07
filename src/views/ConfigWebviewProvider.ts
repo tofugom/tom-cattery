@@ -219,6 +219,14 @@ export class ConfigWebviewProvider {
         }
         break;
       }
+
+      case 'openFolder': {
+        const folderPath = msg.path as string;
+        if (folderPath) {
+          vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(folderPath));
+        }
+        break;
+      }
     }
   }
 
@@ -501,6 +509,31 @@ export class ConfigWebviewProvider {
     opacity: 0.6;
     font-style: italic;
   }
+  .btn-icon {
+    padding: 4px 6px;
+    background: transparent;
+    border: 1px solid var(--vscode-widget-border, #444);
+    border-radius: 2px;
+    cursor: pointer;
+    color: var(--vscode-foreground);
+    font-size: 1em;
+    line-height: 1;
+    opacity: 0.8;
+  }
+  .btn-icon:hover {
+    opacity: 1;
+    background: var(--vscode-button-secondaryBackground);
+  }
+  .deploy-path {
+    font-size: 0.85em;
+    opacity: 0.7;
+    font-family: var(--vscode-editor-font-family, monospace);
+    margin-left: 108px;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
 </style>
 </head>
 <body>
@@ -526,6 +559,7 @@ export class ConfigWebviewProvider {
       <div class="field">
         <label>Catalina Base</label>
         <input type="text" id="basePath" readonly />
+        <button class="btn-icon" id="openBasePath" title="폴더 열기">&#128193;</button>
       </div>
       <div class="field">
         <label>Java Home</label>
@@ -688,10 +722,17 @@ export class ConfigWebviewProvider {
 
     const warName = (dep.warPath || '').split('/').pop().split('\\\\').pop().replace(/\\.war$/, '') || 'deployment';
 
+    const ctxDir = contextPathToDir(dep.contextPath || '/');
+    const displayPath = 'webapps/' + ctxDir;
+
     card.innerHTML =
       '<div class="card-header">' +
         '<span class="card-title">' + escapeHtml(warName) + '</span>' +
         '<button class="remove-btn btn-remove-deploy" data-index="' + index + '">Remove</button>' +
+      '</div>' +
+      '<div class="deploy-path">' +
+        '<span class="dep-deployPath">' + escapeHtml(displayPath) + '</span>' +
+        '<button class="btn-icon btn-open-deploy" title="배포 폴더 열기">&#128193;</button>' +
       '</div>' +
       '<div class="field">' +
         '<label>Context Path</label>' +
@@ -718,6 +759,19 @@ export class ConfigWebviewProvider {
     // Browse WAR button
     card.querySelector('.btn-browse-war').addEventListener('click', () => {
       vscode.postMessage({ command: 'browseWarPath', index: index });
+    });
+
+    // Open deploy folder button
+    card.querySelector('.btn-open-deploy').addEventListener('click', () => {
+      const ctxPath = card.querySelector('.dep-contextPath').value || '/';
+      const dir = (config.basePath || '') + '/webapps/' + contextPathToDir(ctxPath);
+      vscode.postMessage({ command: 'openFolder', path: dir });
+    });
+
+    // Update deploy path when context path changes
+    card.querySelector('.dep-contextPath').addEventListener('input', (e) => {
+      const ctxPath = e.target.value || '/';
+      card.querySelector('.dep-deployPath').textContent = 'webapps/' + contextPathToDir(ctxPath);
     });
 
     // Remove button
@@ -759,6 +813,11 @@ export class ConfigWebviewProvider {
   }
 
   // ===== Utility =====
+  function contextPathToDir(ctxPath) {
+    if (ctxPath === '/' || ctxPath === '') { return 'ROOT'; }
+    return ctxPath.replace(/^\\//, '').replace(/\\//g, '#');
+  }
+
   function formatJavaHome(name, path) {
     if (name && path) { return name + '  (' + path + ')'; }
     return path || '';
@@ -853,6 +912,13 @@ export class ConfigWebviewProvider {
 
   document.getElementById('addDeployment').addEventListener('click', () => {
     vscode.postMessage({ command: 'addDeployment' });
+  });
+
+  document.getElementById('openBasePath').addEventListener('click', () => {
+    const basePath = document.getElementById('basePath').value;
+    if (basePath) {
+      vscode.postMessage({ command: 'openFolder', path: basePath });
+    }
   });
 
   window.addEventListener('message', event => {
