@@ -32,12 +32,10 @@ export class DeployManager {
       );
     }
 
-    // 2. Resolve WAR path and check existence
-    const warPath = this.resolveVariables(deployment.warPath);
-    try {
-      await fs.access(warPath);
-    } catch {
-      throw new Error(`WAR file not found: ${warPath}`);
+    // 2. Resolve WAR path (with wildcard support) and check existence
+    const warPath = await this.resolveWarPath(deployment.warPath);
+    if (!warPath) {
+      throw new Error(`WAR file not found: ${this.resolveVariables(deployment.warPath)}`);
     }
 
     // 3. Map context path to webapps directory name
@@ -397,6 +395,56 @@ export class DeployManager {
         });
       });
     });
+  }
+
+  /**
+   * WAR 경로를 해석한다.
+   * - 와일드카드(*.war)가 포함된 경우: glob 매칭하여 최신 WAR 파일 반환
+   * - 정확한 파일명인 경우: 그대로 반환
+   */
+  async resolveWarPath(rawPath: string): Promise<string | undefined> {
+    const resolved = this.resolveVariables(rawPath);
+
+    if (!resolved.includes('*')) {
+      // 정확한 경로
+      try {
+        await fs.access(resolved);
+        return resolved;
+      } catch {
+        return undefined;
+      }
+    }
+
+    // 와일드카드 경로: 디렉터리 + 패턴 분리
+    const dir = path.dirname(resolved);
+    const pattern = path.basename(resolved); // 예: "*.war" 또는 "module-name*.war"
+    const regexStr = pattern
+      .replace(/[.+^${}()|[\]\\]/g, '\\$&') // escape special chars (except *)
+      .replace(/\*/g, '.*');                  // * → .*
+    const regex = new RegExp(`^${regexStr}$`);
+
+    try {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      const matches: { name: string; mtime: number }[] = [];
+
+      for (const entry of entries) {
+        if (entry.isDirectory()) { continue; }
+        if (regex.test(entry.name)) {
+          const stat = await fs.stat(path.join(dir, entry.name));
+          matches.push({ name: entry.name, mtime: stat.mtimeMs });
+        }
+      }
+
+      if (matches.length === 0) {
+        return undefined;
+      }
+
+      // 가장 최근 수정된 파일 반환
+      matches.sort((a, b) => b.mtime - a.mtime);
+      return path.join(dir, matches[0].name);
+    } catch {
+      return undefined;
+    }
   }
 
   private resolveVariables(p: string): string {

@@ -12,6 +12,7 @@ import { LogStreamer } from '../core/LogStreamer';
 import { DeployManager } from '../core/DeployManager';
 import { DebugController } from '../core/DebugController';
 import { PortUtils } from '../core/PortUtils';
+import { GradleProjectScanner, GradleWarModule } from '../core/GradleProjectScanner';
 
 interface JavaRuntime {
   name: string;
@@ -379,6 +380,23 @@ export function registerServerCommands(
     vscode.commands.registerCommand('tomCattery.addDeployment', async (item?: ServerTreeItem) => {
       const instance = item?.instance ?? await pickServer(instanceManager);
       if (!instance) {
+        return;
+      }
+
+      // 배포 추가 방식 선택
+      const method = await vscode.window.showQuickPick([
+        { label: '$(search) Gradle 모듈 자동 감지', description: 'settings.gradle에서 WAR 모듈을 스캔합니다', id: 'gradle' },
+        { label: '$(file) WAR 파일 직접 선택', description: '빌드된 WAR 파일을 직접 선택합니다', id: 'manual' },
+      ], { placeHolder: '배포 추가 방식을 선택하세요' });
+
+      if (!method) { return; }
+
+      if (method.id === 'gradle') {
+        try {
+          await addGradleDeploymentsToServer(instance);
+        } catch (err: any) {
+          vscode.window.showErrorMessage(`Gradle 배포 등록 실패: ${err.message}`);
+        }
         return;
       }
 
@@ -993,7 +1011,93 @@ export function registerServerCommands(
         );
       }
     }),
+
+    // ── Add Gradle Deployments ──
+    vscode.commands.registerCommand('tomCattery.addGradleDeployments', async (item?: ServerTreeItem) => {
+      const instance = item?.instance ?? await pickServer(instanceManager);
+      if (!instance) {
+        return;
+      }
+      try {
+        await addGradleDeploymentsToServer(instance);
+      } catch (err: any) {
+        vscode.window.showErrorMessage(`Gradle 배포 등록 실패: ${err.message}`);
+      }
+    }),
   );
+
+  // ── Gradle 배포 등록 헬퍼 ──
+  async function addGradleDeploymentsToServer(instance: TomcatInstance): Promise<void> {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspaceRoot) {
+      vscode.window.showWarningMessage('워크스페이스가 열려 있지 않습니다.');
+      return;
+    }
+
+    const scanner = new GradleProjectScanner();
+    const modules = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: 'Gradle WAR 모듈 스캔 중...' },
+      () => scanner.scanWorkspace(workspaceRoot),
+    );
+
+    if (modules.length === 0) {
+      vscode.window.showWarningMessage('WAR 모듈을 찾을 수 없습니다. build.gradle에 war 플러그인이 있는지 확인하세요.');
+      return;
+    }
+
+    // 이미 등록된 배포의 buildTask 목록
+    const existingTasks = new Set(instance.deployments.map(d => d.buildTask).filter(Boolean));
+
+    const items = modules.map(m => ({
+      label: m.name,
+      description: `${m.buildTask} → /${m.name}`,
+      picked: !existingTasks.has(m.buildTask),
+      module: m,
+    }));
+
+    const picked = await vscode.window.showQuickPick(items, {
+      placeHolder: `WAR 모듈을 선택하세요 (${modules.length}개 감지됨)`,
+      canPickMany: true,
+    });
+
+    if (!picked || picked.length === 0) {
+      return;
+    }
+
+    let added = 0;
+    for (const item of picked) {
+      const m = item.module;
+      const deploymentName = m.name;
+      const contextPath = `/${m.name}`;
+
+      // 같은 contextPath가 이미 있으면 스킵
+      if (instance.deployments.some(d => d.contextPath === contextPath)) {
+        continue;
+      }
+
+      const deployment: Deployment = {
+        name: deploymentName,
+        type: 'gradle',
+        buildTask: m.buildTask,
+        warPath: m.warPath,
+        contextPath,
+        autoDeploy: false,
+        watchPaths: [m.watchPath],
+      };
+
+      await instanceManager.addDeployment(instance.name, deployment);
+      added++;
+    }
+
+    // 인스턴스 새로고침
+    treeProvider.setServers(instanceManager.getInstances());
+
+    if (added > 0) {
+      vscode.window.showInformationMessage(`${added}개 Gradle 배포가 "${instance.name}"에 등록되었습니다.`);
+    } else {
+      vscode.window.showInformationMessage('선택한 모듈이 이미 모두 등록되어 있습니다.');
+    }
+  }
 
   // ── Import 헬퍼 ──
   async function importSingleServer(serverExport: TomCatteryServerExport): Promise<void> {
