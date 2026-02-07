@@ -123,6 +123,21 @@
         "contents": "No servers yet.\n[Add Server](command:tomCattery.addServer)"
       }
     ],
+    "configuration": {
+      "title": "Tom Cattery",
+      "properties": {
+        "tomCattery.defaultHttpPort": {
+          "type": "number",
+          "default": 8080,
+          "description": "새 서버의 기본 HTTP 포트"
+        },
+        "tomCattery.autoResolvePortConflicts": {
+          "type": "boolean",
+          "default": true,
+          "description": "포트 충돌 시 자동으로 사용 가능한 포트 할당"
+        }
+      }
+    },
     "menus": {
       "view/title": [
         {

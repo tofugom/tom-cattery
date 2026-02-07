@@ -3,6 +3,7 @@ import { TomcatInstance } from '../types';
 import { InstanceManager } from '../core/InstanceManager';
 import { ProcessManager } from '../core/ProcessManager';
 import { ServerTreeProvider } from './ServerTreeProvider';
+import { PortUtils } from '../core/PortUtils';
 
 interface ConfigMessage {
   command: string;
@@ -50,7 +51,9 @@ export class ConfigWebviewProvider {
     return {
       name: instance.name,
       runtimePath: instance.runtimePath,
+      basePath: instance.basePath,
       javaHome: instance.javaHome,
+      javaHomeName: instance.javaHomeName || '',
       ports: { ...instance.ports },
       jvmArgs: instance.jvmArgs,
       envVars: { ...instance.envVars },
@@ -77,6 +80,13 @@ export class ConfigWebviewProvider {
 
       case 'saveConfig': {
         try {
+          // 포트 충돌 체크
+          const portConflict = this.checkPortConflict(instance.name, msg.data.ports);
+          if (portConflict) {
+            panel.webview.postMessage({ command: 'saveResult', success: false, error: portConflict });
+            vscode.window.showErrorMessage(portConflict);
+            return;
+          }
           await this.applyConfigData(instance, msg.data);
           await this.instanceManager.saveFullConfig(instance);
           this.treeProvider.setServers(this.instanceManager.getInstances());
@@ -103,6 +113,13 @@ export class ConfigWebviewProvider {
 
       case 'applyAndRestart': {
         try {
+          // 포트 충돌 체크
+          const portConflict2 = this.checkPortConflict(instance.name, msg.data.ports);
+          if (portConflict2) {
+            panel.webview.postMessage({ command: 'saveResult', success: false, error: portConflict2 });
+            vscode.window.showErrorMessage(portConflict2);
+            return;
+          }
           await this.applyConfigData(instance, msg.data);
           await this.instanceManager.saveFullConfig(instance);
           this.treeProvider.setServers(this.instanceManager.getInstances());
@@ -122,14 +139,55 @@ export class ConfigWebviewProvider {
       }
 
       case 'browseJavaHome': {
+        const runtimes = vscode.workspace.getConfiguration('java')
+          .get<Array<{ name: string; path: string; default?: boolean }>>('configuration.runtimes', []);
+
+        if (runtimes.length > 0) {
+          const sorted = [...runtimes].sort((a, b) => {
+            if (a.default && !b.default) { return -1; }
+            if (!a.default && b.default) { return 1; }
+            return 0;
+          });
+          const items = [
+            ...sorted.map(r => ({
+              label: r.name,
+              description: r.default ? '(기본값)' : '',
+              runtimeName: r.name,
+              value: r.path,
+            })),
+            { label: '$(folder-opened) 로컬 JDK 직접 선택...', description: '', runtimeName: '', value: '__browse__' },
+          ];
+          const picked = await vscode.window.showQuickPick(items, {
+            placeHolder: 'JAVA_HOME 선택',
+          });
+          if (!picked) { break; }
+          if (picked.value !== '__browse__') {
+            panel.webview.postMessage({ command: 'javaHomeSelected', path: picked.value, name: picked.runtimeName });
+            break;
+          }
+        } else {
+          const choice = await vscode.window.showQuickPick(
+            [
+              { label: '$(folder-opened) 로컬 JDK 직접 선택', description: '설치된 JDK 폴더를 선택합니다', value: 'browse' as const },
+              { label: '$(gear) java.configuration.runtimes 설정 열기', description: 'settings.json에서 JDK를 등록합니다', value: 'settings' as const },
+            ],
+            { placeHolder: 'java.configuration.runtimes에 등록된 JDK가 없습니다' },
+          );
+          if (!choice) { break; }
+          if (choice.value === 'settings') {
+            await vscode.commands.executeCommand('workbench.action.openSettings', 'java.configuration.runtimes');
+            break;
+          }
+        }
+
         const uri = await vscode.window.showOpenDialog({
           canSelectFiles: false,
           canSelectFolders: true,
           canSelectMany: false,
-          openLabel: 'Select JAVA_HOME',
+          openLabel: 'JAVA_HOME 디렉토리 선택',
         });
         if (uri && uri.length > 0) {
-          panel.webview.postMessage({ command: 'javaHomePath', path: uri[0].fsPath });
+          panel.webview.postMessage({ command: 'javaHomeSelected', path: uri[0].fsPath, name: '' });
         }
         break;
       }
@@ -166,6 +224,7 @@ export class ConfigWebviewProvider {
 
   private applyConfigData(instance: TomcatInstance, data: any): void {
     instance.javaHome = data.javaHome || instance.javaHome;
+    instance.javaHomeName = data.javaHomeName || undefined;
     instance.ports = {
       http: parseInt(data.ports.http) || instance.ports.http,
       https: parseInt(data.ports.https) || instance.ports.https,
@@ -198,6 +257,17 @@ export class ConfigWebviewProvider {
         watchPaths: d.watchPaths || [],
       }));
     }
+  }
+
+  private checkPortConflict(serverName: string, portsData: any): string | null {
+    const ports = {
+      http: parseInt(portsData.http) || 0,
+      https: parseInt(portsData.https) || 0,
+      shutdown: parseInt(portsData.shutdown) || 0,
+      ajp: parseInt(portsData.ajp) || 0,
+      debug: parseInt(portsData.debug) || 0,
+    };
+    return PortUtils.findConflict(ports, this.instanceManager.getInstances(), serverName);
   }
 
   dispose(): void {
@@ -450,13 +520,19 @@ export class ConfigWebviewProvider {
         <input type="text" id="serverName" readonly />
       </div>
       <div class="field">
-        <label>Runtime Path</label>
+        <label>Catalina Home</label>
         <input type="text" id="runtimePath" readonly />
       </div>
       <div class="field">
-        <label>JAVA_HOME</label>
-        <input type="text" id="javaHome" />
-        <button class="secondary" id="browseJavaHome">Browse...</button>
+        <label>Catalina Base</label>
+        <input type="text" id="basePath" readonly />
+      </div>
+      <div class="field">
+        <label>Java Home</label>
+        <input type="text" id="javaHomeDisplay" readonly style="flex:2;" />
+        <input type="hidden" id="javaHome" />
+        <input type="hidden" id="javaHomeName" />
+        <button class="secondary" id="browseJavaHome">변경...</button>
       </div>
     </div>
 
@@ -556,7 +632,10 @@ export class ConfigWebviewProvider {
     config = data;
     document.getElementById('serverName').value = data.name;
     document.getElementById('runtimePath').value = data.runtimePath;
+    document.getElementById('basePath').value = data.basePath || '';
     document.getElementById('javaHome').value = data.javaHome || '';
+    document.getElementById('javaHomeName').value = data.javaHomeName || '';
+    document.getElementById('javaHomeDisplay').value = formatJavaHome(data.javaHomeName, data.javaHome);
     document.getElementById('portHttp').value = data.ports.http;
     document.getElementById('portHttps').value = data.ports.https;
     document.getElementById('portShutdown').value = data.ports.shutdown;
@@ -680,6 +759,11 @@ export class ConfigWebviewProvider {
   }
 
   // ===== Utility =====
+  function formatJavaHome(name, path) {
+    if (name && path) { return name + '  (' + path + ')'; }
+    return path || '';
+  }
+
   function escapeAttr(s) {
     return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
   }
@@ -719,6 +803,7 @@ export class ConfigWebviewProvider {
 
     return {
       javaHome: document.getElementById('javaHome').value,
+      javaHomeName: document.getElementById('javaHomeName').value || undefined,
       ports: {
         http: document.getElementById('portHttp').value,
         https: document.getElementById('portHttps').value,
@@ -783,8 +868,10 @@ export class ConfigWebviewProvider {
           showStatus('Save failed: ' + (msg.error || 'Unknown error'), true);
         }
         break;
-      case 'javaHomePath':
+      case 'javaHomeSelected':
         document.getElementById('javaHome').value = msg.path;
+        document.getElementById('javaHomeName').value = msg.name || '';
+        document.getElementById('javaHomeDisplay').value = formatJavaHome(msg.name, msg.path);
         break;
       case 'warPathResult': {
         const cards = document.querySelectorAll('.deploy-card');

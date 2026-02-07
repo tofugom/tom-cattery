@@ -19,6 +19,21 @@ let configWebviewProvider: ConfigWebviewProvider | undefined;
 export async function activate(context: vscode.ExtensionContext) {
   console.log('Tom Cattery is now active!');
 
+  // 필수 Extension 체크: Debugger for Java
+  if (!vscode.extensions.getExtension('vscjava.vscode-java-debug')) {
+    vscode.window.showWarningMessage(
+      'Tom Cattery: 디버그 기능을 사용하려면 "Debugger for Java" Extension이 필요합니다.',
+      'Extension 설치',
+    ).then(action => {
+      if (action === 'Extension 설치') {
+        vscode.commands.executeCommand(
+          'workbench.extensions.installExtension',
+          'vscjava.vscode-java-debug',
+        );
+      }
+    });
+  }
+
   const runtimeManager = new RuntimeManager(context);
   const instanceManager = new InstanceManager();
   const serverTreeProvider = new ServerTreeProvider();
