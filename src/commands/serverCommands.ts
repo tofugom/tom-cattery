@@ -141,29 +141,41 @@ export function registerServerCommands(
 
         if (runtimes.length === 0) {
           const action = await vscode.window.showInformationMessage(
-            'No Tomcat runtime registered. Select a Tomcat installation directory.',
-            'Browse',
+            'Tomcat Runtime이 등록되어 있지 않습니다.',
+            '다운로드',
+            '로컬 선택',
           );
-          if (action !== 'Browse') {
+          if (action === '다운로드') {
+            selectedRuntime = await runtimeManager.downloadRuntime();
+          } else if (action === '로컬 선택') {
+            selectedRuntime = await runtimeManager.addLocalRuntime();
+          } else {
             return;
           }
-          selectedRuntime = await runtimeManager.addRuntime();
         } else {
           const items = [
             ...runtimes.map(r => ({
               label: `Apache Tomcat ${r.version}`,
-              description: r.path,
+              description: r.type === 'downloaded' ? '(다운로드됨)' : r.path,
               runtime: r,
+              id: 'runtime' as const,
             })),
-            { label: '$(add) Add New Runtime...', description: '', runtime: undefined as any },
+            { label: '$(cloud-download) Tomcat 다운로드...', description: '', runtime: undefined as any, id: 'download' as const },
+            { label: '$(folder-opened) 로컬 Runtime 추가...', description: '', runtime: undefined as any, id: 'local' as const },
           ];
           const picked = await vscode.window.showQuickPick(items, {
-            placeHolder: 'Select Tomcat Runtime',
+            placeHolder: 'Tomcat Runtime을 선택하세요',
           });
           if (!picked) {
             return;
           }
-          selectedRuntime = picked.runtime ?? await runtimeManager.addRuntime();
+          if (picked.id === 'download') {
+            selectedRuntime = await runtimeManager.downloadRuntime();
+          } else if (picked.id === 'local') {
+            selectedRuntime = await runtimeManager.addLocalRuntime();
+          } else {
+            selectedRuntime = picked.runtime;
+          }
         }
 
         if (!selectedRuntime) {
@@ -274,6 +286,11 @@ export function registerServerCommands(
     // ── Add Runtime ──
     vscode.commands.registerCommand('tomCattery.addRuntime', async () => {
       await runtimeManager.addRuntime();
+    }),
+
+    // ── Download Runtime ──
+    vscode.commands.registerCommand('tomCattery.downloadRuntime', async () => {
+      await runtimeManager.downloadRuntime();
     }),
 
     // ── Start Server ──

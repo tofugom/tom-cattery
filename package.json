@@ -48,6 +48,11 @@
         "title": "Tom Cattery: Add Runtime"
       },
       {
+        "command": "tomCattery.downloadRuntime",
+        "title": "Tom Cattery: Download Runtime",
+        "icon": "$(cloud-download)"
+      },
+      {
         "command": "tomCattery.startServer",
         "title": "Tom Cattery: Start Server",
         "icon": "$(play)"
