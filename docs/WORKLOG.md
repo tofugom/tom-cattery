@@ -1,0 +1,254 @@
+# Tom Cattery - Work Log
+
+## Phase 0 + Phase 1: 프로젝트 셋업 + 빈 UI (완료)
+
+**작업일**: 2026-02-07
+**브랜치**: feature/phase-1
+
+### 완료 항목
+- package.json 생성 (contributes 전체 선언: viewsContainers, views, commands, menus)
+- tsconfig.json, .vscode/launch.json, .vscode/tasks.json 설정
+- resources/tom-cattery.svg Activity Bar 아이콘
+- src/types/index.ts 인터페이스 정의 (TomcatInstance, PortConfig, Deployment, DebugConfig, TomcatRuntime)
+- src/views/ServerTreeProvider.ts 빈 TreeView Provider
+- src/commands/serverCommands.ts 11개 커맨드 스텁 등록
+- src/extension.ts 진입점 (activate/deactivate)
+- npm install & compile 성공
+
+### F5 확인
+- Activity Bar에 고양이 아이콘 표시
+- 빈 "Servers" TreeView
+- Cmd+Shift+P → "Tom Cattery" 커맨드 검색 가능
+- "New Server" → InputBox 동작
+
+---
+
+## Phase 2: CATALINA_BASE 생성 (완료)
+
+**작업일**: 2026-02-07
+**브랜치**: feature/phase-1
+
+### 완료 항목
+- src/core/RuntimeManager.ts — Tomcat 런타임 경로 선택, lib/catalina.jar 검증, 버전 감지, globalState 저장
+- src/core/ConfigParser.ts — server.xml 포트 패치, context.xml reloadable=true 설정
+- src/core/InstanceManager.ts — CATALINA_BASE 디렉토리 생성, conf 복사, setenv.sh/bat 생성, .tom-cattery.json 메타데이터
+- serverCommands.ts에 addServer 전체 플로우 (런타임 선택 → 이름 → 포트 → JAVA_HOME → 생성)
+- deleteServer 실제 삭제 구현
+- extension.ts에서 매니저 초기화, 기존 서버 자동 로드
+- package.json에 viewsWelcome 추가 (빈 상태 안내)
+
+### 버그 수정
+- TreeView description에 `$(circle-outline)` 텍스트가 그대로 출력되는 문제 → ThemeIcon 사용으로 변경
+- 마우스 오버 시 Markdown 툴팁으로 포트 정보 표시
+
+### F5 확인
+- "New Server" → Tomcat 경로 선택 → 서버명/포트 입력 → `~/.vscode/tom-cattery/servers/` 에 디렉토리 생성
+- TreeView에 서버 표시 (아이콘 + 이름 + 포트)
+- Delete Server 동작 확인
+
+### 메모
+- 사용자 요구: 서버 생성 시 입력값(포트, JAVA_HOME 등)을 나중에 설정 패널에서 변경 가능하도록 → Phase 6(Config Webview)에서 구현 예정
+
+---
+
+## Phase 3: 기동/중지 (완료)
+
+**작업일**: 2026-02-07
+**브랜치**: feature/phase-1
+
+### 완료 항목
+- src/core/ProcessManager.ts
+  - `catalina.sh run` (spawn)으로 Tomcat 기동, CATALINA_HOME/BASE/JAVA_HOME 환경변수 설정
+  - `catalina.sh stop`으로 graceful shutdown (15초 타임아웃 후 SIGKILL)
+  - Restart = Stop + Start
+  - stdout에서 "Server startup in" 감지 시 starting → running 상태 전환
+  - 프로세스 비정상 종료 시 경고 메시지
+  - killAll() — deactivate 시 모든 프로세스 강제 종료
+  - Windows 지원 (catalina.bat)
+- src/core/LogStreamer.ts
+  - 서버별 독립 OutputChannel (`Tom Cattery: {서버명}`)
+  - stdout/stderr 실시간 스트리밍
+- src/core/InstanceManager.ts에 updateStatus() 추가
+- serverCommands.ts
+  - Start/Stop/Restart 실제 구현 (TreeView 인라인 버튼 + 커맨드 팔레트)
+  - 커맨드 팔레트 실행 시 QuickPick으로 서버 선택 (상태 기반 필터링)
+  - Open Logs 커맨드 구현
+  - Delete Server에 실행 중 삭제 방지 추가
+- extension.ts
+  - ProcessManager, LogStreamer 초기화
+  - 상태 변경 콜백으로 TreeView 실시간 갱신
+  - deactivate()에서 프로세스/채널 정리
+
+### F5 확인 방법
+- TreeView에서 서버 우클릭 → Start → Tomcat 기동 로그 출력
+- localhost:{port} 접속 → Tomcat 기본 페이지
+- TreeView 아이콘 ○→●(초록) 변경 확인
+- Stop → 서버 중지 → 아이콘 ●→○ 복귀
+- Restart 동작 확인
+- Open Logs → OutputChannel 표시
+
+---
+
+## Phase 4: WAR Exploded 배포 (완료)
+
+**작업일**: 2026-02-07
+**브랜치**: feature/phase-1
+
+### 완료 항목
+- src/core/DeployManager.ts
+  - WAR 파일을 exploded 형태로 webapps/ 하위에 배포
+  - Context Path 매핑: `/` → `ROOT/`, `/api` → `api/`, `/app/v2` → `app#v2/`
+  - 증분 배포: 파일 크기 + 내용(Buffer.equals) 비교로 변경된 파일만 덮어쓰기
+  - WAR에서 삭제된 파일 자동 제거
+  - 실행 중인 서버에 배포 시 context.xml touch로 리로드 트리거
+  - Gradle Build Task Hook: VSCode Task API로 `gradlew {taskName}` 실행, 종료 코드 확인
+  - `${workspaceFolder}` 변수 치환 지원
+- src/core/InstanceManager.ts
+  - addDeployment(): 같은 contextPath 기존 배포 대체, 메타데이터 저장
+  - removeDeployment(): contextPath 기준 배포 제거
+  - saveMetadata(): .tom-cattery.json에 deployments 배열 동기화
+- src/commands/serverCommands.ts
+  - deploy 커맨드: WAR 파일 선택 → Context Path 입력 → Gradle task(선택) → 배포
+  - 기존 배포 Redeploy 지원 (QuickPick 선택)
+  - redeployAll 커맨드: 서버의 모든 배포를 순차 재배포
+- src/extension.ts
+  - DeployManager 초기화 및 registerServerCommands에 전달
+
+### F5 확인 방법
+- Deploy → WAR 파일 선택 → Context Path 지정 → webapps/{contextDir}/ 에 파일 배포됨
+- 브라우저에서 해당 Context Path 접속 가능
+- Redeploy → 변경 파일만 업데이트 (updated/removed 카운트 표시)
+- Gradle 빌드 태스크 연동 (선택사항)
+
+### 추가 개선 (Phase 4 이후)
+- Deploy → Add Deployment (설정 등록) + Deploy (배포 실행) 분리
+- TreeView 계층 구조: 서버 → 하위 배포 목록 (WAR명 + context path)
+- Edit Deployment: 배포 아이템 우클릭 → Context Path, WAR 경로, Build Task 수정
+- Remove Deployment: 배포 아이템 개별 삭제
+- Clean Deployment: 서버 레벨 전체/개별 배포 삭제
+
+---
+
+## Phase 5: 원클릭 디버그 (완료)
+
+**작업일**: 2026-02-07
+**브랜치**: feature/phase-1
+
+### 완료 항목
+- src/core/ProcessManager.ts
+  - `startServer(instance, mode)` — `'run' | 'jpda'` 모드 지원
+  - `catalina.sh jpda run`으로 JPDA 디버그 모드 기동
+  - 기동 완료 시 `'debugging'` 상태로 전환
+  - `restartServer`도 mode 전파
+- src/core/InstanceManager.ts
+  - `injectJpdaConfig()` — setenv.sh/bat에 JPDA 설정 마커 블록 주입 (idempotent)
+  - `removeJpdaConfig()` — 디버그 종료 시 JPDA 블록 제거
+  - 마커: `# ===== TOM CATTERY DEBUG CONFIG (auto-managed) =====`
+- src/core/DebugController.ts (신규)
+  - `debugServer()` — 전체 디버그 플로우 오케스트레이션
+  - `ensurePortAvailable()` — net.createServer로 포트 사용 가능 확인
+  - `waitForJpdaReady()` — TCP 연결 폴링 (500ms 간격, 30초 타임아웃)
+  - `attachDebugger()` — vscode.debug.startDebugging() 자동 attach (launch.json 불필요)
+  - `onDebugSessionEnd()` — 디버그 종료 시 JPDA 설정 정리
+  - 에러 처리: 포트 충돌, 타임아웃, attach 실패, Java Debug 확장 미설치
+- src/commands/serverCommands.ts
+  - debugServer 스텁 → DebugController.debugServer() 호출로 교체
+  - withProgress로 진행 상태 표시
+- src/extension.ts
+  - DebugController 초기화 및 전달
+  - deactivate()에서 디버그 세션 정리
+
+### F5 확인 방법
+- TreeView에서 서버 Debug(🐛) 버튼 클릭
+- OutputChannel에서 JPDA 모드 기동 로그 확인
+- VSCode Debug 패널에 "Tom Cattery: {서버명}" 세션 자동 연결
+- Java 소스에 브레이크포인트 → 브라우저 요청 → 코드에서 멈춤
+- 디버그 세션 종료 → setenv.sh에서 JPDA 블록 자동 제거
+
+---
+
+## Phase 6a: Auto Deploy (완료)
+
+**작업일**: 2026-02-07
+**브랜치**: feature/phase-1
+
+### 완료 항목
+- src/core/DeployManager.ts
+  - `setupWatchers(instance)` — autoDeploy가 true인 deployment에 대해 FileSystemWatcher 생성
+  - `disposeWatchers(serverName)` / `disposeAllWatchers()` — watcher 정리
+  - `inferWatchPaths(warPath)` — WAR 경로에서 watchPath 추론 (build/libs → src/main/webapp)
+  - `onFileChanged()` — 파일 변경 감지 시 확장자별 분기
+  - `syncSingleFile()` — JSP/HTML/CSS/JS 등 Hot Sync (즉시 복사)
+  - `onFileDeleted()` — 소스 삭제 시 webapps에서도 삭제
+  - `debouncedBuild()` — .java 변경 시 1초 debounce 후 Gradle 빌드 + 재배포
+  - `HOT_DEPLOY_EXTENSIONS` — .jsp, .html, .css, .js, .json, .xml, .properties, 이미지 등
+  - `setLogStreamer()` — OutputChannel 연결
+- src/extension.ts
+  - 서버 상태 변경 콜백에 watcher 생명주기 관리 추가
+  - running/debugging 전환 시 `setupWatchers()`, stopped 전환 시 `disposeWatchers()`
+  - deactivate()에서 `disposeAllWatchers()` 호출
+- src/commands/serverCommands.ts
+  - `toggleAutoDeploy` 커맨드 추가 (deployment 아이템에서 토글)
+  - 토글 시 서버 실행 중이면 즉시 watcher 갱신
+  - `addDeployment`에서 `inferWatchPaths()`로 watchPaths 기본값 설정
+- src/views/ServerTreeProvider.ts
+  - DeploymentTreeItem에 autoDeploy 상태 표시 (eye 아이콘 + blue 컬러)
+  - contextValue 분리: `deployment` / `deployment-auto`
+  - 툴팁에 Auto Deploy 상태, Watch Paths 표시
+- package.json
+  - `toggleAutoDeploy` 커맨드 및 메뉴 추가
+  - deployment 아이템 inline 버튼 (deploy + toggle auto deploy)
+  - 우클릭 메뉴에도 Toggle Auto Deploy 추가
+
+### F5 확인 방법
+- 서버에 deployment 추가 → TreeView에서 deployment 우클릭 → Toggle Auto Deploy
+- 아이콘이 package → eye(파란색)로 변경됨
+- 서버 기동 → OutputChannel에 `[Tom Cattery] Auto-deploy watchers active.` 메시지
+- `src/main/webapp/index.jsp` 수정 → `[Hot Sync] index.jsp` 로그 + webapps에 자동 복사
+- `.java` 수정 → 1초 후 `[Auto Deploy] Java source changed. Building and redeploying...` → Gradle 빌드 + WAR 재배포
+- 서버 중지 → watcher 자동 정리
+
+---
+
+## Phase 6b: Config Webview — 서버 설정 UI (완료)
+
+**작업일**: 2026-02-07
+**브랜치**: feature/phase-1
+
+### 완료 항목
+- src/core/ConfigParser.ts
+  - `updateServerXmlPorts(xmlPath, oldPorts, newPorts)` — 기존 커스텀 포트값을 새 값으로 교체 (기본 8080/8005가 아닌 이미 변경된 포트도 처리)
+- src/core/InstanceManager.ts
+  - `saveFullConfig(instance)` — .tom-cattery.json에 전체 설정 저장 (ports, javaHome, jvmArgs, envVars, debug)
+  - 포트 변경 시 `ConfigParser.updateServerXmlPorts()` 자동 호출
+  - `regenerateSetenvSh()` / `regenerateSetenvBat()` — JAVA_HOME, JVM args, 환경변수를 마커 블록(`TOM CATTERY SETENV CONFIG`) 방식으로 재생성
+  - `getInstance(name)` — 이름으로 인스턴스 조회 헬퍼
+- src/views/ConfigWebviewProvider.ts (신규)
+  - WebviewPanel 기반 설정 에디터 (에디터 영역에 탭으로 열림)
+  - 폼 섹션:
+    - **General**: Server Name(읽기전용), Runtime Path(읽기전용), JAVA_HOME(편집 + Browse 버튼)
+    - **Ports**: HTTP, HTTPS, Shutdown, AJP, Debug 포트 (숫자 입력)
+    - **JVM Options**: textarea (한 줄에 하나씩)
+    - **Environment Variables**: key-value 테이블 (추가/삭제)
+    - **Debug**: suspend, autoAttach 체크박스 토글
+  - 메시지 핸들링: saveConfig, applyAndRestart, browseJavaHome, loadConfig
+  - 같은 서버 패널 중복 열기 방지 (기존 패널 포커스)
+  - VSCode 테마 호환: `--vscode-*` CSS 변수 사용
+  - 서버 실행 중 Save 시 "Restart required" 경고 + 즉시 재시작 옵션
+- src/commands/serverCommands.ts
+  - openConfig 스텁 → ConfigWebviewProvider.openConfig() 실제 구현으로 교체
+  - 커맨드 팔레트에서도 서버 선택 후 설정 열기 가능
+- src/extension.ts
+  - ConfigWebviewProvider 초기화 및 registerServerCommands에 전달
+  - deactivate()에서 패널 정리
+
+### F5 확인 방법
+1. TreeView → 서버 우클릭 → "Edit Configuration" → Webview 패널이 에디터 영역에 열림
+2. 포트 변경 → Save → `.tom-cattery.json`의 포트값 업데이트 + `conf/server.xml` 포트 교체 확인
+3. JVM args 입력 (예: `-Xms512m`) → Save → `bin/setenv.sh` 내 마커 블록에 반영 확인
+4. 환경변수 추가 (예: `APP_ENV=dev`) → Save → setenv.sh에 `export APP_ENV="dev"` 추가 확인
+5. JAVA_HOME Browse → 폴더 선택 → 입력칸에 경로 반영
+6. Debug suspend/autoAttach 토글 → Save → .tom-cattery.json에 반영
+7. 서버 실행 중 Save → "Restart required" 경고 팝업 → "Restart Now" 클릭 시 재기동
+8. "Save & Restart" 버튼 → 설정 저장 후 서버 즉시 재시작
+9. 같은 서버 Config를 두 번 열면 기존 패널 포커스 (중복 생성 안됨)

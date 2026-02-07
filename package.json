@@ -1,0 +1,227 @@
+{
+  "name": "tom-cattery",
+  "displayName": "Tom Cattery",
+  "description": "Tomcat Server Manager for VSCode - raise your Tomcats in one place",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "tom-cattery",
+          "title": "Tom Cattery",
+          "icon": "resources/tom-cattery-terminal-ears.svg"
+        }
+      ]
+    },
+    "views": {
+      "tom-cattery": [
+        {
+          "id": "tomCattery.servers",
+          "name": "Servers"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "tomCattery.addServer",
+        "title": "Tom Cattery: New Server",
+        "icon": "$(add)"
+      },
+      {
+        "command": "tomCattery.addRuntime",
+        "title": "Tom Cattery: Add Runtime"
+      },
+      {
+        "command": "tomCattery.startServer",
+        "title": "Tom Cattery: Start Server",
+        "icon": "$(play)"
+      },
+      {
+        "command": "tomCattery.stopServer",
+        "title": "Tom Cattery: Stop Server",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "tomCattery.restartServer",
+        "title": "Tom Cattery: Restart Server",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "tomCattery.debugServer",
+        "title": "Tom Cattery: Debug Server",
+        "icon": "$(bug)"
+      },
+      {
+        "command": "tomCattery.addDeployment",
+        "title": "Tom Cattery: Add Deployment",
+        "icon": "$(add)"
+      },
+      {
+        "command": "tomCattery.deploy",
+        "title": "Tom Cattery: Deploy",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "tomCattery.redeployAll",
+        "title": "Tom Cattery: Redeploy All"
+      },
+      {
+        "command": "tomCattery.openConfig",
+        "title": "Tom Cattery: Edit Configuration",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "tomCattery.openLogs",
+        "title": "Tom Cattery: Open Logs",
+        "icon": "$(output)"
+      },
+      {
+        "command": "tomCattery.cleanDeployment",
+        "title": "Tom Cattery: Clean Deployment",
+        "icon": "$(close)"
+      },
+      {
+        "command": "tomCattery.editDeployment",
+        "title": "Tom Cattery: Edit Deployment",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "tomCattery.removeDeployment",
+        "title": "Tom Cattery: Remove Deployment",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "tomCattery.toggleAutoDeploy",
+        "title": "Tom Cattery: Toggle Auto Deploy",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "tomCattery.deleteServer",
+        "title": "Tom Cattery: Delete Server",
+        "icon": "$(trash)"
+      }
+    ],
+    "viewsWelcome": [
+      {
+        "view": "tomCattery.servers",
+        "contents": "No servers yet.\n[Add Server](command:tomCattery.addServer)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "tomCattery.addServer",
+          "when": "view == tomCattery.servers",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "tomCattery.startServer",
+          "when": "view == tomCattery.servers && viewItem == server-stopped",
+          "group": "inline@1"
+        },
+        {
+          "command": "tomCattery.debugServer",
+          "when": "view == tomCattery.servers && viewItem == server-stopped",
+          "group": "inline@2"
+        },
+        {
+          "command": "tomCattery.stopServer",
+          "when": "view == tomCattery.servers && viewItem =~ /server-(starting|running|debugging)/",
+          "group": "inline@1"
+        },
+        {
+          "command": "tomCattery.restartServer",
+          "when": "view == tomCattery.servers && viewItem =~ /server-(starting|running|debugging)/",
+          "group": "inline@2"
+        },
+        {
+          "command": "tomCattery.addDeployment",
+          "when": "view == tomCattery.servers && viewItem =~ /server-.*/",
+          "group": "1_actions@1"
+        },
+        {
+          "command": "tomCattery.redeployAll",
+          "when": "view == tomCattery.servers && viewItem =~ /server-.*/",
+          "group": "1_actions@2"
+        },
+        {
+          "command": "tomCattery.cleanDeployment",
+          "when": "view == tomCattery.servers && viewItem =~ /server-.*/",
+          "group": "1_actions@3"
+        },
+        {
+          "command": "tomCattery.openConfig",
+          "when": "view == tomCattery.servers && viewItem =~ /server-.*/",
+          "group": "2_config@1"
+        },
+        {
+          "command": "tomCattery.openLogs",
+          "when": "view == tomCattery.servers && viewItem =~ /server-.*/",
+          "group": "2_config@2"
+        },
+        {
+          "command": "tomCattery.deleteServer",
+          "when": "view == tomCattery.servers && viewItem =~ /server-.*/",
+          "group": "3_danger@1"
+        },
+        {
+          "command": "tomCattery.deploy",
+          "when": "view == tomCattery.servers && viewItem =~ /deployment.*/",
+          "group": "inline@1"
+        },
+        {
+          "command": "tomCattery.toggleAutoDeploy",
+          "when": "view == tomCattery.servers && viewItem =~ /deployment.*/",
+          "group": "inline@2"
+        },
+        {
+          "command": "tomCattery.editDeployment",
+          "when": "view == tomCattery.servers && viewItem =~ /deployment.*/",
+          "group": "1_actions@1"
+        },
+        {
+          "command": "tomCattery.toggleAutoDeploy",
+          "when": "view == tomCattery.servers && viewItem =~ /deployment.*/",
+          "group": "1_actions@2"
+        },
+        {
+          "command": "tomCattery.removeDeployment",
+          "when": "view == tomCattery.servers && viewItem =~ /deployment.*/",
+          "group": "2_danger@1"
+        }
+      ]
+    }
+  },
+  "dependencies": {
+    "fast-xml-parser": "^4.3.0",
+    "adm-zip": "^0.5.10",
+    "portfinder": "^1.0.32"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0",
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.0.0",
+    "@types/adm-zip": "^0.5.5",
+    "@vscode/test-electron": "^2.3.0",
+    "esbuild": "^0.19.0",
+    "@vscode/vsce": "^2.22.0"
+  }
+}

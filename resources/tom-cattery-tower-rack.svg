@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Tom Cattery Tower Rack">
+  <g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Cat ears -->
+    <path d="M8 6.8l2-2.4 2 2.1 2-2.1 2 2.4" />
+    <!-- Tower body -->
+    <rect x="7" y="6.8" width="10" height="14.5" rx="2"/>
+    <!-- Rack slots -->
+    <path d="M9 10h6M9 12.6h6M9 15.2h6M9 17.8h6" />
+    <!-- Small status LED -->
+    <path d="M15.8 10h.1" />
+  </g>
+</svg>
