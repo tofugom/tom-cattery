@@ -12,6 +12,7 @@ export interface TomcatInstance {
   timeouts: TimeoutConfig;
   status: 'stopped' | 'starting' | 'running' | 'stopping' | 'debugging';
   pid?: number;
+  startedAt?: number;  // Date.now() — 서버 기동 시각 (transient, 영속화하지 않음)
 }
 
 export interface TimeoutConfig {

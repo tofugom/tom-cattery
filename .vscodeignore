@@ -8,3 +8,5 @@ node_modules/**
 docs/**
 CLAUDE.md
 .DS_Store
+sample/**
+tsconfig.json
