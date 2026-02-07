@@ -168,6 +168,11 @@
         "icon": "$(copy)"
       },
       {
+        "command": "tomCattery.saveToWorkspace",
+        "title": "Tom Cattery: Save to Workspace",
+        "icon": "$(root-folder)"
+      },
+      {
         "command": "tomCattery.addGradleDeployments",
         "title": "Tom Cattery: Add Gradle Deployments",
         "icon": "$(package)"
@@ -274,9 +279,14 @@
           "group": "2_config@3"
         },
         {
-          "command": "tomCattery.exportConfig",
+          "command": "tomCattery.saveToWorkspace",
           "when": "view == tomCattery.servers && viewItem =~ /server-.*/",
           "group": "2_config@4"
+        },
+        {
+          "command": "tomCattery.exportConfig",
+          "when": "view == tomCattery.servers && viewItem =~ /server-.*/",
+          "group": "2_config@5"
         },
         {
           "command": "tomCattery.deleteServer",
