@@ -10,8 +10,10 @@ export class DeploymentTreeItem extends vscode.TreeItem {
     public readonly instance: TomcatInstance,
     public readonly deployment: Deployment,
   ) {
-    const warFileName = path.basename(deployment.warPath, '.war');
-    super(warFileName, vscode.TreeItemCollapsibleState.None);
+    const label = deployment.warPath.includes('*')
+      ? deployment.name
+      : path.basename(deployment.warPath, '.war');
+    super(label, vscode.TreeItemCollapsibleState.None);
 
     this.description = deployment.contextPath;
     this.contextValue = deployment.autoDeploy ? 'deployment-auto' : 'deployment';
