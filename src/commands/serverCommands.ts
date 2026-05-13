@@ -136,6 +136,19 @@ export function registerServerCommands(
   configWebviewProvider: ConfigWebviewProvider,
   pendingBrowserOpen: Set<string>,
 ): void {
+  // Gradle deployment 가 등록된 서버는 start/restart/debug 시
+  // 자동으로 gradle build → WAR explode 를 먼저 수행한다.
+  // 등록된 deployment 중 type === 'gradle' 만 대상이며,
+  // 이미 빌드된 WAR 를 직접 등록한 type === 'war' 는 건드리지 않는다.
+  async function buildAndDeployGradle(instance: TomcatInstance): Promise<void> {
+    const gradleDeployments = instance.deployments.filter(
+      d => d.type === 'gradle' && d.buildTask,
+    );
+    for (const dep of gradleDeployments) {
+      await deployManager.deploy(instance, dep);
+    }
+  }
+
   context.subscriptions.push(
     // ── Add Server ──
     vscode.commands.registerCommand('tomCattery.addServer', async () => {
@@ -306,6 +319,7 @@ export function registerServerCommands(
       }
       try {
         pendingBrowserOpen.add(instance.name);
+        await buildAndDeployGradle(instance);
         await processManager.startServer(instance);
       } catch (err: any) {
         pendingBrowserOpen.delete(instance.name);
@@ -346,7 +360,9 @@ export function registerServerCommands(
       }
       try {
         pendingBrowserOpen.add(instance.name);
-        await processManager.restartServer(instance);
+        await processManager.stopServer(instance);
+        await buildAndDeployGradle(instance);
+        await processManager.startServer(instance);
       } catch (err: any) {
         pendingBrowserOpen.delete(instance.name);
         const action = await vscode.window.showErrorMessage(
@@ -367,6 +383,7 @@ export function registerServerCommands(
       }
       try {
         pendingBrowserOpen.add(instance.name);
+        await buildAndDeployGradle(instance);
         await vscode.window.withProgress(
           { location: vscode.ProgressLocation.Notification, title: `"${instance.name}" 디버그 시작 중...`, cancellable: false },
           () => debugController.debugServer(instance),
@@ -1243,13 +1260,15 @@ export function registerServerCommands(
 
     const items = modules.map(m => ({
       label: m.name,
-      description: `${m.buildTask} → /${m.name}`,
-      picked: !existingTasks.has(m.buildTask),
+      description: existingTasks.has(m.buildTask)
+        ? `${m.buildTask} → /${m.name}  (이미 등록됨)`
+        : `${m.buildTask} → /${m.name}`,
+      picked: false,
       module: m,
     }));
 
     const picked = await vscode.window.showQuickPick(items, {
-      placeHolder: `WAR 모듈을 선택하세요 (${modules.length}개 감지됨)`,
+      placeHolder: `등록할 WAR 모듈을 체크하세요 (${modules.length}개 감지됨)`,
       canPickMany: true,
     });
 

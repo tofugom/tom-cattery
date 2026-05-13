@@ -25,11 +25,7 @@ export class ProcessManager {
     const isDebug = mode === 'jpda';
 
     const args = isDebug ? ['jpda', 'run'] : ['run'];
-    const proc = spawn(script, args, {
-      env,
-      shell: true,
-      cwd: instance.basePath,
-    });
+    const proc = this.spawnCatalina(script, args, instance.basePath, env);
 
     this.processes.set(instance.name, proc);
     this.onStatusChange(instance.name, 'starting', proc.pid);
@@ -157,7 +153,7 @@ export class ProcessManager {
     // Graceful shutdown via catalina.sh stop
     const script = this.getCatalinaScript(instance.runtimePath);
     const env = this.buildEnv(instance);
-    spawn(script, ['stop'], { env, shell: true });
+    this.spawnCatalina(script, ['stop'], instance.basePath, env);
 
     // Wait for process to exit, force kill after stop timeout
     const stopTimeoutMs = (instance.timeouts?.stop ?? 15) * 1000;
@@ -203,6 +199,23 @@ export class ProcessManager {
     const isWindows = process.platform === 'win32';
     const scriptName = isWindows ? 'catalina.bat' : 'catalina.sh';
     return path.join(runtimePath, 'bin', scriptName);
+  }
+
+  /**
+   * catalina.sh/bat 호출 — 경로에 공백이 있어도 안전하도록 quoting 처리.
+   * - Unix: shell 우회하고 직접 실행 (Node 가 execve 로 공백 처리)
+   * - Windows: cmd.exe /c 로 wrap, 인자는 spawn 이 quoting
+   */
+  private spawnCatalina(
+    script: string,
+    args: string[],
+    cwd: string,
+    env: NodeJS.ProcessEnv,
+  ): ChildProcess {
+    if (process.platform === 'win32') {
+      return spawn('cmd.exe', ['/c', script, ...args], { env, cwd });
+    }
+    return spawn(script, args, { env, cwd });
   }
 
   private buildEnv(instance: TomcatInstance): NodeJS.ProcessEnv {
