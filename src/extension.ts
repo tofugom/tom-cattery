@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs/promises';
+import { randomUUID } from 'crypto';
 import { TomcatInstance, TomcatRuntime, TomCatteryExportData } from './types';
 import { ServerTreeProvider } from './views/ServerTreeProvider';
 import { ConfigWebviewProvider } from './views/ConfigWebviewProvider';
@@ -236,6 +237,115 @@ async function migrateFromOldPublisher(context: vscode.ExtensionContext): Promis
   }
 }
 
+/** uuid v4 형식 디렉터리명 판별 */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * 이름 기반 CATALINA_BASE(`servers/{name}/`) → id 기반(`servers/{id}/`)으로 마이그레이션하고,
+ * 변환된 서버를 현재 워크스페이스의 `.vscode/tom-cattery.json` 레지스트리에 등록한다.
+ *
+ * 이전 버전은 모든 서버를 전역 관리했으므로, 마이그레이션 시점에 열려 있는 워크스페이스로
+ * 일괄 귀속시킨다. (워크스페이스가 없으면 변환만 하고 레지스트리 등록은 보류)
+ */
+async function migrateToWorkspaceRegistry(
+  context: vscode.ExtensionContext,
+  registryPath: string | undefined,
+): Promise<void> {
+  const baseDir = path.join(context.globalStorageUri.fsPath, 'servers');
+
+  let entries;
+  try {
+    entries = await fs.readdir(baseDir, { withFileTypes: true });
+  } catch {
+    return; // servers 디렉터리 없음
+  }
+
+  const migrated: any[] = [];
+
+  for (const entry of entries) {
+    if (!entry.isDirectory() || UUID_RE.test(entry.name)) { continue; }
+
+    const oldDir = path.join(baseDir, entry.name);
+    const metaPath = path.join(oldDir, '.tom-cattery.json');
+
+    let meta: any;
+    try {
+      meta = JSON.parse(await fs.readFile(metaPath, 'utf-8'));
+    } catch {
+      continue; // 메타 없는 디렉터리는 건너뜀
+    }
+    if (meta.id) { continue; } // 이미 변환됨
+
+    const id = randomUUID();
+    meta.id = id;
+    meta.origin = {
+      workspace: registryPath ? path.dirname(path.dirname(registryPath)) : '',
+      name: meta.name,
+    };
+    await fs.writeFile(metaPath, JSON.stringify(meta, null, 2), 'utf-8');
+    await fs.rename(oldDir, path.join(baseDir, id));
+    console.log(`[Tom Cattery] 서버 "${meta.name}" → id 키로 마이그레이션 (${id})`);
+    migrated.push(meta);
+  }
+
+  if (migrated.length === 0) { return; }
+
+  if (!registryPath) {
+    console.warn(
+      `[Tom Cattery] ${migrated.length}개 서버를 id 키로 변환했으나 열린 워크스페이스가 없어 ` +
+      '레지스트리에 등록하지 못했습니다.',
+    );
+    return;
+  }
+
+  // 레지스트리에 병합 (이름 기준 중복 회피)
+  let registry: TomCatteryExportData;
+  try {
+    registry = JSON.parse(await fs.readFile(registryPath, 'utf-8'));
+    if (!registry.version || !Array.isArray(registry.servers)) {
+      throw new Error('invalid');
+    }
+  } catch {
+    registry = { version: 1, exportedAt: new Date().toISOString(), servers: [] };
+  }
+
+  const existingNames = new Set(registry.servers.map(s => s.name));
+  for (const meta of migrated) {
+    if (existingNames.has(meta.name)) { continue; }
+    registry.servers.push({
+      id: meta.id,
+      name: meta.name,
+      runtimePath: meta.runtimePath,
+      runtimeVersion: meta.runtimeVersion,
+      runtimeType: meta.runtimeType,
+      javaHome: meta.javaHome || '',
+      javaHomeName: meta.javaHomeName,
+      ports: {
+        http: meta.httpPort,
+        https: meta.httpsPort,
+        shutdown: meta.shutdownPort,
+        ajp: meta.ajpPort,
+        debug: meta.debugPort,
+      },
+      jvmArgs: meta.jvmArgs ? String(meta.jvmArgs).split(' ').filter(Boolean) : [],
+      envVars: meta.envVars || {},
+      deployments: meta.deployments || [],
+      debug: meta.debug || {
+        enabled: true,
+        port: meta.debugPort,
+        suspend: false,
+        autoAttach: true,
+        sourcePaths: [],
+      },
+      timeouts: meta.timeouts || { start: 45, stop: 15 },
+    });
+  }
+  registry.exportedAt = new Date().toISOString();
+  await fs.mkdir(path.dirname(registryPath), { recursive: true });
+  await fs.writeFile(registryPath, JSON.stringify(registry, null, 2), 'utf-8');
+  console.log(`[Tom Cattery] ${migrated.length}개 서버를 워크스페이스 레지스트리에 등록`);
+}
+
 export async function activate(context: vscode.ExtensionContext) {
   console.log('Tom Cattery is now active!');
 
@@ -260,8 +370,17 @@ export async function activate(context: vscode.ExtensionContext) {
   // publisher 변경 시 globalStorage 경로 마이그레이션
   await migrateFromOldPublisher(context);
 
+  // 워크스페이스 레지스트리 경로 (.vscode/tom-cattery.json)
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const registryPath = workspaceRoot
+    ? path.join(workspaceRoot, '.vscode', 'tom-cattery.json')
+    : undefined;
+
+  // 이름 기반 → id 기반 + 워크스페이스 레지스트리 마이그레이션
+  await migrateToWorkspaceRegistry(context, registryPath);
+
   const runtimeManager = new RuntimeManager(context);
-  const instanceManager = new InstanceManager(context.globalStorageUri.fsPath);
+  const instanceManager = new InstanceManager(context.globalStorageUri.fsPath, registryPath);
   const serverTreeProvider = new ServerTreeProvider();
 
   const treeView = vscode.window.createTreeView('tomCattery.servers', {
@@ -346,53 +465,6 @@ export async function activate(context: vscode.ExtensionContext) {
     }
     serverTreeProvider.refresh();
   }, 10_000);
-
-  // .vscode/tom-cattery.json 감지 → Import 제안
-  detectWorkspaceConfig(instanceManager, serverTreeProvider);
-}
-
-async function detectWorkspaceConfig(
-  instanceManager: InstanceManager,
-  treeProvider: ServerTreeProvider,
-): Promise<void> {
-  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  if (!workspaceRoot) { return; }
-
-  const configPath = path.join(workspaceRoot, '.vscode', 'tom-cattery.json');
-  try {
-    await fs.access(configPath);
-  } catch {
-    return; // 파일 없음
-  }
-
-  let exportData: TomCatteryExportData;
-  try {
-    const content = await fs.readFile(configPath, 'utf-8');
-    exportData = JSON.parse(content);
-  } catch {
-    return; // 파싱 실패
-  }
-
-  if (!exportData.version || !Array.isArray(exportData.servers) || exportData.servers.length === 0) {
-    return;
-  }
-
-  // 현재 등록되지 않은 서버만 필터링
-  const existingNames = new Set(instanceManager.getInstances().map(i => i.name));
-  const newServers = exportData.servers.filter(s => !existingNames.has(s.name));
-
-  if (newServers.length === 0) { return; }
-
-  const serverNames = newServers.map(s => s.name).join(', ');
-  const action = await vscode.window.showInformationMessage(
-    `이 프로젝트에 Tomcat 설정이 있습니다 (${newServers.length}개 서버: ${serverNames}). 가져올까요?`,
-    '가져오기',
-    '무시',
-  );
-
-  if (action !== '가져오기') { return; }
-
-  await vscode.commands.executeCommand('tomCattery.importConfig', configPath);
 }
 
 export function deactivate() {

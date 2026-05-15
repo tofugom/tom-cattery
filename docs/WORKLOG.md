@@ -329,3 +329,49 @@
 ### 최종 빌드
 - VSIX 패키징 성공: tom-cattery-0.1.0.vsix (298 KB, 56 files)
 - 다음 작업: Windows 환경 테스트
+
+---
+
+## v0.3.0: 워크스페이스별 서버 관리 + id 기반 CATALINA_BASE (완료)
+
+**작업일**: 2026-05-15
+**브랜치**: main
+
+### 배경
+이전까지 서버 정보는 `globalStorage/servers/{name}/`에 전역으로 저장되어 모든 워크스페이스에서 동일하게 보였다.
+Eclipse처럼 워크스페이스별로 서버를 관리하고, 워크스페이스 간 동일 이름 서버의 충돌을 방지하기 위한 구조로 전환했다.
+
+### 핵심 변경 — 두 영역 분리
+Eclipse의 관리 방식을 차용:
+- **레지스트리(설정/소속)** = 워크스페이스 `.vscode/tom-cattery.json` — 진실의 원천, 팀 공유 가능
+- **CATALINA_BASE 실체(런타임 상태)** = `globalStorage/servers/{id}/` — UUID 키로 분리, 무거운 webapps/logs/work는 워크스페이스 밖에 보관
+- Eclipse 매핑: `.metadata/.../tmp0/` ↔ globalStorage 실체 / "Servers" 프로젝트 ↔ `.vscode/tom-cattery.json`
+
+### 완료 항목
+- **타입**: `TomcatInstance`에 `id`, `runtimeVersion?`, `runtimeType?`, `provisioned?` 추가. `TomCatteryServerExport`에 `id?` 추가
+- **InstanceManager 리팩터링**:
+  - 생성자에 `registryPath`(워크스페이스 `.vscode/tom-cattery.json`) 추가
+  - `loadInstances()`를 globalStorage 스캔 → 레지스트리 파싱으로 교체
+  - CATALINA_BASE 디렉터리 키를 `{name}` → `{id}`(UUID v4)로 변경
+  - `ensureBase()` 신규: 멱등 lazy provisioning — base 없으면 인스턴스 정의로부터 재생성
+  - base 메타에 `origin: { workspace, name }` 역참조 기록 — 레지스트리 복붙(동일 id가 다른 워크스페이스 base를 가리킴) 충돌 감지 후 새 id로 분리
+  - `createInstance`/`saveFullConfig`/`addDeployment`/`removeDeployment`/`deleteInstance`/`cloneInstance`가 base 메타 + 레지스트리 write-through
+  - `injectJpdaConfig`도 ensureBase 호출 (디버그 진입 시 base 자동 생성 보장)
+- **마이그레이션** (`migrateToWorkspaceRegistry`): 기존 `servers/{name}/` → `servers/{id}/`로 이동하면서 현재 워크스페이스 레지스트리에 일괄 등록
+- **명령 정리**:
+  - `tomCattery.startServer`/`debugServer`에 `ensureBase()` 호출 추가
+  - `tomCattery.addServer`에 워크스페이스 열림 가드 추가
+  - `tomCattery.saveToWorkspace` 재구현 — `saveRegistry()` 호출로 간소화 (레지스트리는 항상 자동 동기화되므로 수동 백업 용도)
+  - `tomCattery.resetGlobalStorage`가 워크스페이스 레지스트리 파일도 함께 삭제
+  - 기존 `detectWorkspaceConfig`(import 제안 알림) 제거 — 레지스트리가 곧 정상 로드 경로
+- **트리뷰**: 미프로비저닝 서버는 `(미생성)` 설명 + `cloud-download` 아이콘으로 시각 구분, 툴팁에 "기동 시 자동 생성" 안내
+
+### 검증
+- npm run compile 통과 (tsc -p ./)
+- Jest 테스트 46개 전체 통과
+
+### 동작 시나리오
+1. 워크스페이스 A에서 서버 생성 → A의 `.vscode/tom-cattery.json`에만 기록 → B 열면 안 보임
+2. `.vscode/tom-cattery.json`을 git 커밋 후 다른 머신에서 clone → 미프로비저닝 상태로 트리에 보임 → 기동 시 base 자동 생성
+3. 두 워크스페이스에서 같은 이름 서버 생성 → globalStorage에서 UUID로 분리되어 충돌 없음
+4. 레지스트리 복붙(동일 id 공유) → 기동 시 origin 불일치 감지 → 새 id로 분리 생성

@@ -1,7 +1,10 @@
 export interface TomcatInstance {
+  id: string;                // CATALINA_BASE 디렉터리 키 (워크스페이스 간 충돌 방지용 불변 ID)
   name: string;
-  basePath: string;
+  basePath: string;          // globalStorage/servers/{id}
   runtimePath: string;
+  runtimeVersion?: string;
+  runtimeType?: 'local' | 'downloaded';
   ports: PortConfig;
   javaHome: string;
   javaHomeName?: string;
@@ -13,6 +16,7 @@ export interface TomcatInstance {
   status: 'stopped' | 'starting' | 'running' | 'stopping' | 'debugging';
   pid?: number;
   startedAt?: number;  // Date.now() — 서버 기동 시각 (transient, 영속화하지 않음)
+  provisioned?: boolean;  // CATALINA_BASE 디렉터리 실재 여부 (transient)
 }
 
 export interface TimeoutConfig {
@@ -60,6 +64,7 @@ export interface TomCatteryExportData {
 }
 
 export interface TomCatteryServerExport {
+  id?: string;               // 워크스페이스 레지스트리에서는 필수, 외부 export 파일에서는 없을 수 있음
   name: string;
   runtimePath: string;
   runtimeVersion?: string;

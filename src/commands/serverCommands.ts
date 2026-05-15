@@ -153,6 +153,14 @@ export function registerServerCommands(
     // ── Add Server ──
     vscode.commands.registerCommand('tomCattery.addServer', async () => {
       try {
+        // 서버는 워크스페이스별로 관리된다 — 워크스페이스가 없으면 생성 불가
+        if (!instanceManager.registryPath) {
+          vscode.window.showWarningMessage(
+            'Tom Cattery 서버는 워크스페이스별로 관리됩니다. 먼저 폴더나 워크스페이스를 여세요.',
+          );
+          return;
+        }
+
         // 1. Select runtime
         const runtimes = runtimeManager.getRuntimes();
         let selectedRuntime;
@@ -319,6 +327,7 @@ export function registerServerCommands(
       }
       try {
         pendingBrowserOpen.add(instance.name);
+        await instanceManager.ensureBase(instance);
         await buildAndDeployGradle(instance);
         await processManager.startServer(instance);
       } catch (err: any) {
@@ -383,6 +392,7 @@ export function registerServerCommands(
       }
       try {
         pendingBrowserOpen.add(instance.name);
+        await instanceManager.ensureBase(instance);
         await buildAndDeployGradle(instance);
         await vscode.window.withProgress(
           { location: vscode.ProgressLocation.Notification, title: `"${instance.name}" 디버그 시작 중...`, cancellable: false },
@@ -931,6 +941,10 @@ export function registerServerCommands(
           const globalStoragePath = context.globalStorageUri.fsPath;
           await fs.rm(globalStoragePath, { recursive: true, force: true });
           await context.globalState.update('tomcatRuntimes', undefined);
+          // 워크스페이스 레지스트리도 함께 제거 (완전 초기화)
+          if (instanceManager.registryPath) {
+            await fs.rm(instanceManager.registryPath, { force: true });
+          }
         },
       );
 
@@ -1103,79 +1117,17 @@ export function registerServerCommands(
     }),
 
     // ── Save to Workspace ──
-    vscode.commands.registerCommand('tomCattery.saveToWorkspace', async (item?: ServerTreeItem) => {
-      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      if (!workspaceRoot) {
+    // 서버 정의는 항상 .vscode/tom-cattery.json 레지스트리에 자동 동기화되므로,
+    // 이 명령은 레지스트리를 강제로 다시 기록하는 용도(복구/수동 저장)로만 남긴다.
+    vscode.commands.registerCommand('tomCattery.saveToWorkspace', async () => {
+      if (!instanceManager.registryPath) {
         vscode.window.showWarningMessage('워크스페이스가 열려 있지 않습니다.');
         return;
       }
-
-      const instances = instanceManager.getInstances();
-      if (instances.length === 0) {
-        vscode.window.showInformationMessage('저장할 서버가 없습니다.');
-        return;
-      }
-
-      // Export 대상 결정
-      let serversToExport: TomcatInstance[];
-
-      if (item?.instance) {
-        serversToExport = [item.instance];
-      } else {
-        const choices = [
-          { label: '$(server-environment) 전체 서버', description: `${instances.length}개 서버`, value: '__all__' },
-          ...instances.map(i => ({
-            label: i.name,
-            description: `:${i.ports.http} (${i.status})`,
-            value: i.name,
-          })),
-        ];
-        const picked = await vscode.window.showQuickPick(choices, {
-          placeHolder: '워크스페이스에 저장할 서버를 선택하세요',
-        });
-        if (!picked) { return; }
-
-        if (picked.value === '__all__') {
-          serversToExport = instances;
-        } else {
-          const found = instances.find(i => i.name === picked.value);
-          if (!found) { return; }
-          serversToExport = [found];
-        }
-      }
-
-      // Export 데이터 구성
-      const runtimes = runtimeManager.getRuntimes();
-      const exportData: TomCatteryExportData = {
-        version: 1,
-        exportedAt: new Date().toISOString(),
-        servers: serversToExport.map(inst => {
-          const rt = runtimes.find(r => r.path === inst.runtimePath);
-          return {
-            name: inst.name,
-            runtimePath: inst.runtimePath,
-            runtimeVersion: rt?.version,
-            runtimeType: rt?.type,
-            javaHome: inst.javaHome,
-            javaHomeName: inst.javaHomeName,
-            ports: { ...inst.ports },
-            jvmArgs: [...inst.jvmArgs],
-            envVars: { ...inst.envVars },
-            deployments: inst.deployments.map(d => ({ ...d })),
-            debug: { ...inst.debug },
-            timeouts: { ...inst.timeouts },
-          };
-        }),
-      };
-
-      // .vscode/tom-cattery.json에 저장
-      const vscodeDir = path.join(workspaceRoot, '.vscode');
-      await fs.mkdir(vscodeDir, { recursive: true });
-      const targetPath = path.join(vscodeDir, 'tom-cattery.json');
-      await fs.writeFile(targetPath, JSON.stringify(exportData, null, 2), 'utf-8');
-
+      const count = instanceManager.getInstances().length;
+      await instanceManager.saveRegistry();
       vscode.window.showInformationMessage(
-        `${serversToExport.length}개 서버 설정을 .vscode/tom-cattery.json에 저장했습니다.`,
+        `${count}개 서버 설정을 .vscode/tom-cattery.json에 저장했습니다.`,
       );
     }),
 

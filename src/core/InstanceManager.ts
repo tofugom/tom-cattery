@@ -1,64 +1,98 @@
 import * as path from 'path';
 import * as fs from 'fs/promises';
-import { TomcatInstance, TomcatRuntime, PortConfig, Deployment, TimeoutConfig } from '../types';
+import { randomUUID } from 'crypto';
+import {
+  TomcatInstance,
+  TomcatRuntime,
+  PortConfig,
+  Deployment,
+  TomCatteryExportData,
+  TomCatteryServerExport,
+} from '../types';
 import { ConfigParser } from './ConfigParser';
 
+/**
+ * 서버는 워크스페이스별로 관리된다.
+ * - 진실의 원천(source of truth): 워크스페이스의 `.vscode/tom-cattery.json` 레지스트리
+ * - CATALINA_BASE 실체: `globalStorage/servers/{id}/` — 이름이 아닌 불변 ID로 키잉하여
+ *   워크스페이스 간 동일 이름 충돌을 방지한다 (Eclipse의 `.metadata/.../tmp0` 방식 차용)
+ * - CATALINA_BASE는 lazy provisioning: 레지스트리에는 있으나 디렉터리가 없으면
+ *   기동 시점(ensureBase)에 정의로부터 재생성한다
+ */
 export class InstanceManager {
   readonly baseDir: string;
+  /** 현재 워크스페이스의 `.vscode/tom-cattery.json` 절대경로 (워크스페이스 없으면 undefined) */
+  readonly registryPath: string | undefined;
+  /** 워크스페이스 루트 경로 (base 소유권 충돌 감지에 사용) */
+  private readonly workspacePath: string | undefined;
   private instances: TomcatInstance[] = [];
 
-  constructor(globalStoragePath: string) {
+  constructor(globalStoragePath: string, registryPath?: string) {
     this.baseDir = path.join(globalStoragePath, 'servers');
+    this.registryPath = registryPath;
+    this.workspacePath = registryPath
+      ? path.dirname(path.dirname(registryPath))
+      : undefined;
   }
 
+  /**
+   * 워크스페이스 레지스트리에서 서버 목록을 로드한다.
+   * 워크스페이스가 없으면 빈 목록을 반환한다.
+   */
   async loadInstances(): Promise<TomcatInstance[]> {
     this.instances = [];
-
-    try {
-      await fs.access(this.baseDir);
-    } catch {
+    if (!this.registryPath) {
       return [];
     }
 
-    const entries = await fs.readdir(this.baseDir, { withFileTypes: true });
+    const registry = await this.readRegistry();
+    let mutated = false;
 
-    for (const entry of entries) {
-      if (!entry.isDirectory()) {
-        continue;
+    for (const s of registry.servers) {
+      let id = s.id;
+      if (!id) {
+        id = randomUUID();
+        s.id = id;
+        mutated = true;
       }
-      const metaPath = path.join(this.baseDir, entry.name, '.tom-cattery.json');
+      const basePath = path.join(this.baseDir, id);
+
+      let provisioned = false;
       try {
-        const content = await fs.readFile(metaPath, 'utf-8');
-        const meta = JSON.parse(content);
-        this.instances.push({
-          name: meta.name,
-          basePath: path.join(this.baseDir, entry.name),
-          runtimePath: meta.runtimePath,
-          ports: {
-            http: meta.httpPort,
-            https: meta.httpsPort,
-            shutdown: meta.shutdownPort,
-            ajp: meta.ajpPort,
-            debug: meta.debugPort,
-          },
-          javaHome: meta.javaHome || '',
-          javaHomeName: meta.javaHomeName || undefined,
-          jvmArgs: meta.jvmArgs ? meta.jvmArgs.split(' ').filter(Boolean) : [],
-          envVars: meta.envVars || {},
-          deployments: meta.deployments || [],
-          debug: meta.debug || {
-            enabled: true,
-            port: meta.debugPort,
-            suspend: false,
-            autoAttach: true,
-            sourcePaths: [],
-          },
-          timeouts: meta.timeouts || { start: 45, stop: 15 },
-          status: 'stopped',
-        });
+        await fs.access(path.join(basePath, '.tom-cattery.json'));
+        provisioned = true;
       } catch {
-        // Skip malformed metadata
+        // CATALINA_BASE 미생성 — 기동 시 ensureBase가 생성
       }
+
+      this.instances.push({
+        id,
+        name: s.name,
+        basePath,
+        runtimePath: s.runtimePath,
+        runtimeVersion: s.runtimeVersion,
+        runtimeType: s.runtimeType,
+        ports: { ...s.ports },
+        javaHome: s.javaHome || '',
+        javaHomeName: s.javaHomeName || undefined,
+        jvmArgs: s.jvmArgs || [],
+        envVars: s.envVars || {},
+        deployments: s.deployments || [],
+        debug: s.debug || {
+          enabled: true,
+          port: s.ports.debug,
+          suspend: false,
+          autoAttach: true,
+          sourcePaths: [],
+        },
+        timeouts: s.timeouts || { start: 45, stop: 15 },
+        status: 'stopped',
+        provisioned,
+      });
+    }
+
+    if (mutated) {
+      await this.saveRegistry();
     }
 
     return this.instances;
@@ -66,6 +100,10 @@ export class InstanceManager {
 
   getInstances(): TomcatInstance[] {
     return [...this.instances];
+  }
+
+  getInstance(name: string): TomcatInstance | undefined {
+    return this.instances.find(i => i.name === name);
   }
 
   updateStatus(name: string, status: TomcatInstance['status'], pid?: number): void {
@@ -81,6 +119,75 @@ export class InstanceManager {
     }
   }
 
+  // ── 레지스트리 (.vscode/tom-cattery.json) ────────────────────────────────
+
+  private async readRegistry(): Promise<TomCatteryExportData> {
+    const empty: TomCatteryExportData = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      servers: [],
+    };
+    if (!this.registryPath) {
+      return empty;
+    }
+    try {
+      const content = await fs.readFile(this.registryPath, 'utf-8');
+      const data = JSON.parse(content) as TomCatteryExportData;
+      if (!data.version || !Array.isArray(data.servers)) {
+        return empty;
+      }
+      return data;
+    } catch {
+      return empty;
+    }
+  }
+
+  private toExport(inst: TomcatInstance): TomCatteryServerExport {
+    return {
+      id: inst.id,
+      name: inst.name,
+      runtimePath: inst.runtimePath,
+      runtimeVersion: inst.runtimeVersion,
+      runtimeType: inst.runtimeType,
+      javaHome: inst.javaHome,
+      javaHomeName: inst.javaHomeName,
+      ports: { ...inst.ports },
+      jvmArgs: [...inst.jvmArgs],
+      envVars: { ...inst.envVars },
+      deployments: inst.deployments.map(d => ({ ...d })),
+      debug: { ...inst.debug },
+      timeouts: { ...inst.timeouts },
+    };
+  }
+
+  /** 현재 인메모리 인스턴스 목록을 워크스페이스 레지스트리에 기록한다. */
+  async saveRegistry(): Promise<void> {
+    if (!this.registryPath) {
+      return;
+    }
+    const data: TomCatteryExportData = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      servers: this.instances.map(i => this.toExport(i)),
+    };
+    await fs.mkdir(path.dirname(this.registryPath), { recursive: true });
+    await fs.writeFile(this.registryPath, JSON.stringify(data, null, 2), 'utf-8');
+  }
+
+  /** base 메타 + 레지스트리를 함께 갱신한다 (base 미생성 시 레지스트리만). */
+  private async persist(instance: TomcatInstance): Promise<void> {
+    if (instance.provisioned) {
+      try {
+        await this.writeBaseMeta(instance);
+      } catch {
+        // base 디렉터리가 아직 없으면 레지스트리만 갱신
+      }
+    }
+    await this.saveRegistry();
+  }
+
+  // ── CATALINA_BASE 생성 / 보장 ─────────────────────────────────────────────
+
   async createInstance(
     name: string,
     runtime: TomcatRuntime,
@@ -88,47 +195,22 @@ export class InstanceManager {
     javaHome: string,
     javaHomeName?: string,
   ): Promise<TomcatInstance> {
-    const instanceDir = path.join(this.baseDir, name);
-
-    // Create directory structure
-    const dirs = ['conf', 'bin', 'webapps', 'logs', 'work', 'temp'];
-    for (const dir of dirs) {
-      await fs.mkdir(path.join(instanceDir, dir), { recursive: true });
+    if (!this.registryPath) {
+      throw new Error('워크스페이스가 열려 있지 않아 서버를 생성할 수 없습니다.');
     }
 
-    // Copy conf files from CATALINA_HOME
-    await this.copyDir(
-      path.join(runtime.path, 'conf'),
-      path.join(instanceDir, 'conf'),
-    );
-
-    // Patch server.xml ports
-    await ConfigParser.patchServerXmlPorts(
-      path.join(instanceDir, 'conf', 'server.xml'),
-      ports,
-    );
-
-    // Patch context.xml for development (reloadable=true)
-    await ConfigParser.patchContextXml(
-      path.join(instanceDir, 'conf', 'context.xml'),
-    );
-
-    // Create setenv.sh / setenv.bat
-    await this.createSetenvSh(instanceDir, name, javaHome);
-    await this.createSetenvBat(instanceDir, name, javaHome);
-
-    // Save metadata
-    const metadata = {
+    const id = randomUUID();
+    const instance: TomcatInstance = {
+      id,
       name,
+      basePath: path.join(this.baseDir, id),
       runtimePath: runtime.path,
-      httpPort: ports.http,
-      httpsPort: ports.https,
-      shutdownPort: ports.shutdown,
-      ajpPort: ports.ajp,
-      debugPort: ports.debug,
+      runtimeVersion: runtime.version,
+      runtimeType: runtime.type,
+      ports,
       javaHome,
-      javaHomeName: javaHomeName || undefined,
-      jvmArgs: '',
+      javaHomeName,
+      jvmArgs: [],
       envVars: {},
       deployments: [],
       debug: {
@@ -139,33 +221,133 @@ export class InstanceManager {
         sourcePaths: [],
       },
       timeouts: { start: 45, stop: 15 },
-      createdAt: new Date().toISOString(),
+      status: 'stopped',
+      provisioned: false,
+    };
+
+    await this.provision(instance);
+    this.instances.push(instance);
+    await this.saveRegistry();
+    return instance;
+  }
+
+  /**
+   * CATALINA_BASE 디렉터리가 존재하도록 보장한다 (멱등).
+   * - 이미 있고 현재 워크스페이스 소유면: no-op
+   * - 있으나 다른 워크스페이스 소유면(레지스트리 복붙 등): 새 id를 발급해 분리 생성
+   * - 없으면: 인스턴스 정의로부터 신규 생성
+   */
+  async ensureBase(instance: TomcatInstance): Promise<void> {
+    const metaPath = path.join(instance.basePath, '.tom-cattery.json');
+
+    let exists = false;
+    try {
+      await fs.access(metaPath);
+      exists = true;
+    } catch {
+      // base 미생성
+    }
+
+    if (exists) {
+      try {
+        const meta = JSON.parse(await fs.readFile(metaPath, 'utf-8'));
+        const origin = meta.origin;
+        if (origin && this.workspacePath && origin.workspace !== this.workspacePath) {
+          // 같은 id가 다른 워크스페이스의 base를 가리킴 → 새 id로 분리
+          instance.id = randomUUID();
+          instance.basePath = path.join(this.baseDir, instance.id);
+          await this.provision(instance);
+          await this.saveRegistry();
+          return;
+        }
+      } catch {
+        // 메타 파싱 실패 시 그대로 사용
+      }
+      instance.provisioned = true;
+      return;
+    }
+
+    await this.provision(instance);
+    await this.saveRegistry();
+  }
+
+  /** 인스턴스 정의로부터 CATALINA_BASE 디렉터리 일체를 생성한다. */
+  private async provision(instance: TomcatInstance): Promise<void> {
+    if (!(await this.isRuntimeValid(instance.runtimePath))) {
+      throw new Error(
+        `Tomcat Runtime 경로가 유효하지 않습니다: ${instance.runtimePath}\n` +
+        'Runtime을 다시 등록한 뒤 서버 설정을 갱신하세요.',
+      );
+    }
+
+    const instanceDir = instance.basePath;
+    const dirs = ['conf', 'bin', 'webapps', 'logs', 'work', 'temp'];
+    for (const dir of dirs) {
+      await fs.mkdir(path.join(instanceDir, dir), { recursive: true });
+    }
+
+    await this.copyDir(
+      path.join(instance.runtimePath, 'conf'),
+      path.join(instanceDir, 'conf'),
+    );
+
+    await ConfigParser.patchServerXmlPorts(
+      path.join(instanceDir, 'conf', 'server.xml'),
+      instance.ports,
+    );
+    await ConfigParser.patchContextXml(
+      path.join(instanceDir, 'conf', 'context.xml'),
+    );
+
+    await this.regenerateSetenvSh(instance);
+    await this.regenerateSetenvBat(instance);
+    await this.writeBaseMeta(instance);
+
+    instance.provisioned = true;
+  }
+
+  private async isRuntimeValid(runtimePath: string): Promise<boolean> {
+    try {
+      await fs.access(path.join(runtimePath, 'conf', 'server.xml'));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** CATALINA_BASE 내 `.tom-cattery.json` 메타를 인스턴스 현재 상태로 기록한다. */
+  private async writeBaseMeta(instance: TomcatInstance): Promise<void> {
+    const metadata = {
+      id: instance.id,
+      name: instance.name,
+      // 소유권 표식 — 같은 id가 다른 워크스페이스에서 재사용될 때 충돌 감지용
+      origin: { workspace: this.workspacePath || '', name: instance.name },
+      runtimePath: instance.runtimePath,
+      runtimeVersion: instance.runtimeVersion,
+      runtimeType: instance.runtimeType,
+      httpPort: instance.ports.http,
+      httpsPort: instance.ports.https,
+      shutdownPort: instance.ports.shutdown,
+      ajpPort: instance.ports.ajp,
+      debugPort: instance.ports.debug,
+      javaHome: instance.javaHome,
+      javaHomeName: instance.javaHomeName || undefined,
+      jvmArgs: instance.jvmArgs.join(' '),
+      envVars: instance.envVars,
+      deployments: instance.deployments,
+      debug: instance.debug,
+      timeouts: instance.timeouts,
+      updatedAt: new Date().toISOString(),
     };
 
     await fs.writeFile(
-      path.join(instanceDir, '.tom-cattery.json'),
+      path.join(instance.basePath, '.tom-cattery.json'),
       JSON.stringify(metadata, null, 2),
       'utf-8',
     );
-
-    const instance: TomcatInstance = {
-      name,
-      basePath: instanceDir,
-      runtimePath: runtime.path,
-      ports,
-      javaHome,
-      javaHomeName,
-      jvmArgs: [],
-      envVars: {},
-      deployments: [],
-      debug: metadata.debug,
-      timeouts: metadata.timeouts,
-      status: 'stopped',
-    };
-
-    this.instances.push(instance);
-    return instance;
   }
+
+  // ── 배포 ─────────────────────────────────────────────────────────────────
 
   async addDeployment(serverName: string, deployment: Deployment): Promise<void> {
     const instance = this.instances.find(i => i.name === serverName);
@@ -173,13 +355,12 @@ export class InstanceManager {
       throw new Error(`Server "${serverName}" not found`);
     }
 
-    // Replace existing deployment with same context path
     instance.deployments = instance.deployments.filter(
       d => d.contextPath !== deployment.contextPath,
     );
     instance.deployments.push(deployment);
 
-    await this.saveMetadata(instance);
+    await this.persist(instance);
   }
 
   async removeDeployment(serverName: string, contextPath: string): Promise<void> {
@@ -188,51 +369,35 @@ export class InstanceManager {
       return;
     }
     instance.deployments = instance.deployments.filter(d => d.contextPath !== contextPath);
-    await this.saveMetadata(instance);
-  }
-
-  private async saveMetadata(instance: TomcatInstance): Promise<void> {
-    const metaPath = path.join(instance.basePath, '.tom-cattery.json');
-    const content = await fs.readFile(metaPath, 'utf-8');
-    const meta = JSON.parse(content);
-    meta.deployments = instance.deployments;
-    await fs.writeFile(metaPath, JSON.stringify(meta, null, 2), 'utf-8');
+    await this.persist(instance);
   }
 
   /**
-   * Save full config: updates .tom-cattery.json, server.xml ports, and setenv.sh/bat.
-   * Returns the old PortConfig so callers can detect changes.
+   * 전체 설정 저장: CATALINA_BASE를 보장한 뒤 .tom-cattery.json / server.xml 포트 /
+   * setenv.sh/bat / 워크스페이스 레지스트리를 모두 갱신한다.
+   * 호출 시점에 instance는 이미 새 값으로 변경된 상태이며, 반환되는 oldPorts는
+   * 디스크에 기록돼 있던 이전 포트 값이다.
    */
   async saveFullConfig(instance: TomcatInstance): Promise<{ oldPorts: PortConfig }> {
+    await this.ensureBase(instance);
+
     const metaPath = path.join(instance.basePath, '.tom-cattery.json');
-    const content = await fs.readFile(metaPath, 'utf-8');
-    const meta = JSON.parse(content);
+    let oldPorts: PortConfig = { ...instance.ports };
+    try {
+      const meta = JSON.parse(await fs.readFile(metaPath, 'utf-8'));
+      oldPorts = {
+        http: meta.httpPort,
+        https: meta.httpsPort,
+        shutdown: meta.shutdownPort,
+        ajp: meta.ajpPort,
+        debug: meta.debugPort,
+      };
+    } catch {
+      // 메타를 못 읽으면 변경 없음으로 간주
+    }
 
-    const oldPorts: PortConfig = {
-      http: meta.httpPort,
-      https: meta.httpsPort,
-      shutdown: meta.shutdownPort,
-      ajp: meta.ajpPort,
-      debug: meta.debugPort,
-    };
+    await this.writeBaseMeta(instance);
 
-    // Update metadata
-    meta.httpPort = instance.ports.http;
-    meta.httpsPort = instance.ports.https;
-    meta.shutdownPort = instance.ports.shutdown;
-    meta.ajpPort = instance.ports.ajp;
-    meta.debugPort = instance.ports.debug;
-    meta.javaHome = instance.javaHome;
-    meta.javaHomeName = instance.javaHomeName || undefined;
-    meta.jvmArgs = instance.jvmArgs.join(' ');
-    meta.envVars = instance.envVars;
-    meta.debug = instance.debug;
-    meta.timeouts = instance.timeouts;
-    meta.deployments = instance.deployments;
-
-    await fs.writeFile(metaPath, JSON.stringify(meta, null, 2), 'utf-8');
-
-    // Patch server.xml if ports changed
     const portsChanged = Object.keys(oldPorts).some(
       k => oldPorts[k as keyof PortConfig] !== instance.ports[k as keyof PortConfig],
     );
@@ -241,16 +406,83 @@ export class InstanceManager {
       await ConfigParser.updateServerXmlPorts(serverXmlPath, oldPorts, instance.ports);
     }
 
-    // Regenerate setenv.sh/bat with current JVM args, env vars, and JAVA_HOME
     await this.regenerateSetenvSh(instance);
     await this.regenerateSetenvBat(instance);
+    await this.saveRegistry();
 
     return { oldPorts };
   }
 
-  getInstance(name: string): TomcatInstance | undefined {
-    return this.instances.find(i => i.name === name);
+  async cloneInstance(
+    sourceName: string,
+    newName: string,
+    newPorts: PortConfig,
+  ): Promise<TomcatInstance> {
+    const source = this.instances.find(i => i.name === sourceName);
+    if (!source) {
+      throw new Error(`소스 서버 "${sourceName}"을 찾을 수 없습니다.`);
+    }
+
+    // 소스 CATALINA_BASE가 없으면 먼저 생성
+    await this.ensureBase(source);
+
+    const newId = randomUUID();
+    const newDir = path.join(this.baseDir, newId);
+
+    // 1. 전체 디렉토리 복사
+    await this.copyDir(source.basePath, newDir);
+
+    // 2. webapps, logs, work, temp 클린업 (배포/캐시는 복제하지 않음)
+    for (const dir of ['webapps', 'logs', 'work', 'temp']) {
+      const dirPath = path.join(newDir, dir);
+      await fs.rm(dirPath, { recursive: true, force: true });
+      await fs.mkdir(dirPath, { recursive: true });
+    }
+
+    // 3. server.xml 포트 패치 (소스 포트 → 새 포트)
+    const serverXmlPath = path.join(newDir, 'conf', 'server.xml');
+    await ConfigParser.updateServerXmlPorts(serverXmlPath, source.ports, newPorts);
+
+    // 4. 새 인스턴스 구성
+    const newInstance: TomcatInstance = {
+      id: newId,
+      name: newName,
+      basePath: newDir,
+      runtimePath: source.runtimePath,
+      runtimeVersion: source.runtimeVersion,
+      runtimeType: source.runtimeType,
+      ports: newPorts,
+      javaHome: source.javaHome,
+      javaHomeName: source.javaHomeName,
+      jvmArgs: [...source.jvmArgs],
+      envVars: { ...source.envVars },
+      deployments: [], // 배포 설정은 초기화
+      debug: { ...source.debug, port: newPorts.debug },
+      timeouts: { ...source.timeouts },
+      status: 'stopped',
+      provisioned: true,
+    };
+
+    // 5. setenv.sh/bat 재생성 + 메타 기록
+    await this.regenerateSetenvSh(newInstance);
+    await this.regenerateSetenvBat(newInstance);
+    await this.writeBaseMeta(newInstance);
+
+    this.instances.push(newInstance);
+    await this.saveRegistry();
+    return newInstance;
   }
+
+  async deleteInstance(name: string): Promise<void> {
+    const instance = this.instances.find(i => i.name === name);
+    this.instances = this.instances.filter(i => i.name !== name);
+    if (instance) {
+      await fs.rm(instance.basePath, { recursive: true, force: true });
+    }
+    await this.saveRegistry();
+  }
+
+  // ── setenv.sh / setenv.bat ────────────────────────────────────────────────
 
   private static readonly SETENV_MARKER_START = '# ===== TOM CATTERY SETENV CONFIG (auto-managed) =====';
   private static readonly SETENV_MARKER_END = '# ===== END TOM CATTERY SETENV CONFIG =====';
@@ -287,7 +519,6 @@ export class InstanceManager {
       if (InstanceManager.SETENV_MARKER_REGEX.test(content)) {
         content = content.replace(InstanceManager.SETENV_MARKER_REGEX, block);
       } else {
-        // Replace the default generated content with marker-managed block
         const header = content.split('\n').filter(l =>
           l.startsWith('#!/bin/bash') || l.startsWith('# Generated by Tom Cattery'),
         ).join('\n');
@@ -295,7 +526,6 @@ export class InstanceManager {
       }
       await fs.writeFile(shPath, content, { mode: 0o755 });
     } catch {
-      // File doesn't exist, create fresh
       const content = [
         '#!/bin/bash',
         `# Generated by Tom Cattery - Server: ${instance.name}`,
@@ -351,72 +581,7 @@ export class InstanceManager {
     }
   }
 
-  async cloneInstance(sourceName: string, newName: string, newPorts: PortConfig): Promise<TomcatInstance> {
-    const source = this.instances.find(i => i.name === sourceName);
-    if (!source) {
-      throw new Error(`소스 서버 "${sourceName}"을 찾을 수 없습니다.`);
-    }
-
-    const sourceDir = path.join(this.baseDir, sourceName);
-    const newDir = path.join(this.baseDir, newName);
-
-    // 1. 전체 디렉토리 복사
-    await this.copyDir(sourceDir, newDir);
-
-    // 2. webapps, logs, work, temp 클린업 (배포/캐시는 복제하지 않음)
-    for (const dir of ['webapps', 'logs', 'work', 'temp']) {
-      const dirPath = path.join(newDir, dir);
-      await fs.rm(dirPath, { recursive: true, force: true });
-      await fs.mkdir(dirPath, { recursive: true });
-    }
-
-    // 3. server.xml 포트 패치 (소스 포트 → 새 포트)
-    const serverXmlPath = path.join(newDir, 'conf', 'server.xml');
-    await ConfigParser.updateServerXmlPorts(serverXmlPath, source.ports, newPorts);
-
-    // 4. .tom-cattery.json 업데이트
-    const metaPath = path.join(newDir, '.tom-cattery.json');
-    const metaContent = await fs.readFile(metaPath, 'utf-8');
-    const meta = JSON.parse(metaContent);
-    meta.name = newName;
-    meta.httpPort = newPorts.http;
-    meta.httpsPort = newPorts.https;
-    meta.shutdownPort = newPorts.shutdown;
-    meta.ajpPort = newPorts.ajp;
-    meta.debugPort = newPorts.debug;
-    meta.debug = { ...meta.debug, port: newPorts.debug };
-    meta.deployments = []; // 배포 설정은 초기화
-    meta.createdAt = new Date().toISOString();
-    await fs.writeFile(metaPath, JSON.stringify(meta, null, 2), 'utf-8');
-
-    // 5. setenv.sh/bat 재생성
-    const newInstance: TomcatInstance = {
-      name: newName,
-      basePath: newDir,
-      runtimePath: source.runtimePath,
-      ports: newPorts,
-      javaHome: source.javaHome,
-      javaHomeName: source.javaHomeName,
-      jvmArgs: [...source.jvmArgs],
-      envVars: { ...source.envVars },
-      deployments: [],
-      debug: { ...source.debug, port: newPorts.debug },
-      timeouts: { ...source.timeouts },
-      status: 'stopped',
-    };
-
-    await this.regenerateSetenvSh(newInstance);
-    await this.regenerateSetenvBat(newInstance);
-
-    this.instances.push(newInstance);
-    return newInstance;
-  }
-
-  async deleteInstance(name: string): Promise<void> {
-    const instanceDir = path.join(this.baseDir, name);
-    await fs.rm(instanceDir, { recursive: true, force: true });
-    this.instances = this.instances.filter(i => i.name !== name);
-  }
+  // ── JPDA (디버그) ─────────────────────────────────────────────────────────
 
   private static readonly JPDA_MARKER_START = '# ===== TOM CATTERY DEBUG CONFIG (auto-managed) =====';
   private static readonly JPDA_MARKER_END = '# ===== END TOM CATTERY DEBUG CONFIG =====';
@@ -427,7 +592,8 @@ export class InstanceManager {
   private static readonly JPDA_BAT_MARKER_REGEX = /rem ===== TOM CATTERY DEBUG CONFIG.*?rem ===== END TOM CATTERY DEBUG CONFIG =====/s;
 
   async injectJpdaConfig(instance: TomcatInstance, debugPort: number, suspend: boolean): Promise<void> {
-    // setenv.sh
+    await this.ensureBase(instance);
+
     const shPath = path.join(instance.basePath, 'bin', 'setenv.sh');
     const shBlock = [
       InstanceManager.JPDA_MARKER_START,
@@ -445,7 +611,6 @@ export class InstanceManager {
     }
     await fs.writeFile(shPath, shContent, { mode: 0o755 });
 
-    // setenv.bat
     const batPath = path.join(instance.basePath, 'bin', 'setenv.bat');
     const batBlock = [
       InstanceManager.JPDA_BAT_MARKER_START,
@@ -480,6 +645,8 @@ export class InstanceManager {
     } catch { /* file might not exist */ }
   }
 
+  // ── 유틸 ─────────────────────────────────────────────────────────────────
+
   private async copyDir(src: string, dst: string): Promise<void> {
     await fs.mkdir(dst, { recursive: true });
     const entries = await fs.readdir(src, { withFileTypes: true });
@@ -492,50 +659,5 @@ export class InstanceManager {
         await fs.copyFile(srcPath, dstPath);
       }
     }
-  }
-
-  private async createSetenvSh(
-    instanceDir: string,
-    name: string,
-    javaHome: string,
-  ): Promise<void> {
-    const content = [
-      '#!/bin/bash',
-      `# Generated by Tom Cattery - Server: ${name}`,
-      '',
-      '# Java Home',
-      `export JAVA_HOME="${javaHome}"`,
-      '',
-      '# JVM Options',
-      'CATALINA_OPTS="$CATALINA_OPTS -Xms256m"',
-      'CATALINA_OPTS="$CATALINA_OPTS -Xmx1024m"',
-      'CATALINA_OPTS="$CATALINA_OPTS -Dfile.encoding=UTF-8"',
-      'export CATALINA_OPTS',
-      '',
-    ].join('\n');
-
-    await fs.writeFile(path.join(instanceDir, 'bin', 'setenv.sh'), content, { mode: 0o755 });
-  }
-
-  private async createSetenvBat(
-    instanceDir: string,
-    name: string,
-    javaHome: string,
-  ): Promise<void> {
-    const content = [
-      '@echo off',
-      `rem Generated by Tom Cattery - Server: ${name}`,
-      '',
-      'rem Java Home',
-      `set "JAVA_HOME=${javaHome}"`,
-      '',
-      'rem JVM Options',
-      'set "CATALINA_OPTS=%CATALINA_OPTS% -Xms256m"',
-      'set "CATALINA_OPTS=%CATALINA_OPTS% -Xmx1024m"',
-      'set "CATALINA_OPTS=%CATALINA_OPTS% -Dfile.encoding=UTF-8"',
-      '',
-    ].join('\r\n');
-
-    await fs.writeFile(path.join(instanceDir, 'bin', 'setenv.bat'), content);
   }
 }

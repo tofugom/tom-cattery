@@ -44,11 +44,17 @@ export class ServerTreeItem extends vscode.TreeItem {
         : vscode.TreeItemCollapsibleState.None,
     );
 
+    const unprovisioned = instance.status === 'stopped' && instance.provisioned === false;
+
     this.description = instance.pid
       ? `:${instance.ports.http} (PID ${instance.pid})`
-      : `:${instance.ports.http}`;
+      : unprovisioned
+        ? `:${instance.ports.http} (미생성)`
+        : `:${instance.ports.http}`;
     this.contextValue = `server-${instance.status}`;
-    this.iconPath = this.getStatusIcon(instance.status);
+    this.iconPath = unprovisioned
+      ? new vscode.ThemeIcon('cloud-download', new vscode.ThemeColor('charts.gray'))
+      : this.getStatusIcon(instance.status);
 
     const pidLine = instance.pid ? `- PID: ${instance.pid}\n` : '';
     let metricsLines = '';
@@ -63,6 +69,7 @@ export class ServerTreeItem extends vscode.TreeItem {
       `**${instance.name}** (${instance.status})\n\n` +
       pidLine +
       metricsLines +
+      (unprovisioned ? '- ⚠ CATALINA_BASE 미생성 — 기동 시 자동 생성됩니다\n' : '') +
       `- HTTP: ${instance.ports.http}\n` +
       `- Shutdown: ${instance.ports.shutdown}\n` +
       `- Debug: ${instance.ports.debug}\n` +
