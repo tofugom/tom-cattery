@@ -1,5 +1,45 @@
 # 변경 이력
 
+## [0.3.0] - 2026-05-15
+
+### 핵심 변경 — 워크스페이스별 서버 관리
+Eclipse 방식을 차용해 **레지스트리(설정/소속)** 와 **CATALINA_BASE 실체(런타임 상태)** 를 분리.
+이전까지 globalStorage에 전역 저장되던 서버 정보를 워크스페이스 단위로 관리하도록 전환.
+
+- **레지스트리**: 워크스페이스 `.vscode/tom-cattery.json` — 진실의 원천, 팀 공유 가능
+- **실체**: `globalStorage/servers/{id}/` — UUID 키로 분리, 무거운 webapps/logs/work는 워크스페이스 밖에 보관
+- 워크스페이스 간 동일 이름 서버 충돌 방지
+
+### 추가
+- **id 기반 CATALINA_BASE**
+  - `TomcatInstance`에 `id` (UUID v4), `runtimeVersion`, `runtimeType`, `provisioned` 필드 추가
+  - CATALINA_BASE 디렉터리 키를 `{name}` → `{id}` 로 변경
+  - base 메타에 `origin: { workspace, name }` 역참조 기록 → 레지스트리 복붙으로 동일 id가 다른 워크스페이스 base를 가리키는 충돌 감지 시 새 id로 자동 분리
+- **Lazy Provisioning**
+  - `ensureBase()` — base 디렉터리 없으면 인스턴스 정의로부터 멱등하게 재생성
+  - Start / Debug / JPDA 주입 시점에 자동 호출 → 다른 머신에서 clone 받자마자 기동 가능
+- **미프로비저닝 서버 시각화**
+  - 트리뷰에 `(미생성)` 설명 + `cloud-download` 아이콘 표시
+  - 툴팁에 "기동 시 자동 생성" 안내
+- **자동 마이그레이션** (`migrateToWorkspaceRegistry`)
+  - 기존 `servers/{name}/` → `servers/{id}/` 로 이동하면서 현재 워크스페이스 레지스트리에 일괄 등록
+
+### 변경
+- `loadInstances()` 가 globalStorage 스캔 → 워크스페이스 레지스트리 파싱으로 교체
+- `createInstance` / `saveFullConfig` / `addDeployment` / `removeDeployment` / `deleteInstance` / `cloneInstance` 가 base 메타와 레지스트리에 write-through
+- `tomCattery.addServer` 에 워크스페이스 열림 가드 추가
+- `tomCattery.saveToWorkspace` 간소화 — 레지스트리는 자동 동기화되므로 수동 백업 용도로 축소
+- `tomCattery.resetGlobalStorage` 가 워크스페이스 레지스트리 파일도 함께 삭제
+
+### 제거
+- 기존 `detectWorkspaceConfig` (import 제안 알림) — 레지스트리가 곧 정상 로드 경로이므로 불필요
+
+### 동작 시나리오
+1. 워크스페이스 A에서 서버 생성 → A의 `.vscode/tom-cattery.json` 에만 기록 → B 열면 안 보임
+2. `.vscode/tom-cattery.json` 을 git 커밋 후 다른 머신에서 clone → 미프로비저닝 상태로 트리에 보임 → 기동 시 base 자동 생성
+3. 두 워크스페이스에서 같은 이름 서버 생성 → globalStorage 에서 UUID로 분리되어 충돌 없음
+4. 레지스트리 복붙(동일 id 공유) → 기동 시 origin 불일치 감지 → 새 id로 분리 생성
+
 ## [0.2.0] - 2026-05-13
 
 ### 개선
